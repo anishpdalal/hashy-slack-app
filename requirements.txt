@@ -1,3 +1,4 @@
+alembic==1.7.4
 anyio==3.3.4
 asgiref==3.4.1
 certifi==2021.10.8
@@ -12,9 +13,11 @@ httptools==0.2.0
 idna==3.3
 itsdangerous==2.0.1
 Jinja2==3.0.2
+Mako==1.1.5
 MarkupSafe==2.0.1
 mccabe==0.6.1
 orjson==3.6.4
+psycopg2-binary==2.9.1
 pycodestyle==2.8.0
 pydantic==1.8.2
 pyflakes==2.4.0
@@ -26,6 +29,7 @@ six==1.16.0
 slack-bolt==1.9.4
 slack-sdk==3.11.2
 sniffio==1.2.0
+SQLAlchemy==1.4.26
 starlette==0.16.0
 typing-extensions==3.10.0.2
 ujson==4.2.0
