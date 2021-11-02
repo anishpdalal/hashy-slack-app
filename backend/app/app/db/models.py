@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, Text, DateTime
 from sqlalchemy.sql import func
 
-from base_class import Base
+from .base_class import Base
 
 
 class Query(Base):
