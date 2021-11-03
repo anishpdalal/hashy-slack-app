@@ -1,2 +1,2 @@
 from .base_class import Base # noqa
-from .models import Query # noqa
+from .models import Document, Query # noqa
