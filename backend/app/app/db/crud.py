@@ -1,14 +1,39 @@
+from typing import Any, Dict
+
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.expression import update
 
 from . import models, schemas
 
 
-def get_query(db: Session, query_id: int):
-    return db.query(models.Query).filter(models.Query.id == query_id).first()
+def get_queries(db: Session, team: str):
+    queries = db.query(models.Query).filter(models.Query.team == team).all()
+    db.close()
+    return queries
 
 
-def get_queries(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.Query).offset(skip).limit(limit).all()
+def get_query_by_text(db: Session, team: str, text: str):
+    query = db.query(models.Query).filter(
+        models.Query.team == team, models.Query.text == text
+    ).first()
+    db.close()
+    return query
+
+
+def create_query(db: Session, query: schemas.QueryCreate):
+    query = models.Query(**query.dict())
+    db.add(query)
+    db.commit()
+    db.refresh(query)
+    db.close()
+    return query
+
+
+def update_query(db: Session, id: int, fields: Dict[str, Any]):
+    query = db.query(models.Query).filter_by(id=id).update(fields)
+    db.commit()
+    db.close()
+    return query
 
 
 def create_document(db: Session, doc: schemas.DocumentCreate):

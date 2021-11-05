@@ -9,6 +9,8 @@ class QueryBase(BaseModel):
     result: str
     team: str
     embedding: bytes
+    evidence: Optional[str] = None
+
 
 class QueryCreate(QueryBase):
     pass
@@ -16,7 +18,6 @@ class QueryCreate(QueryBase):
 
 class Query(QueryBase):
     id: int
-    evidence: Optional[str] = None
     time_created: datetime
     time_updated: datetime
 
@@ -26,6 +27,7 @@ class Query(QueryBase):
 
 class DocumentBase(BaseModel):
     team: str
+    name: str
     word_positions: str
     embeddings: bytes
     url: str

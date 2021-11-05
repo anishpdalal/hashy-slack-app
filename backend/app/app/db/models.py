@@ -20,6 +20,7 @@ class Query(Base):
 class Document(Base):
     id = Column(Integer, primary_key=True, index=True)
     team = Column(String, nullable=False)
+    name = Column(String, nullable=False)
     word_positions = Column(Text, nullable=False)
     url = Column(String, nullable=False)
     embeddings = Column(PickleType, nullable=False)

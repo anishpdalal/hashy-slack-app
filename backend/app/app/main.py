@@ -37,6 +37,7 @@ def _get_document_text(url):
 def _process_document(file):
     url_private = file["url_private"]
     team= url_private.split("/")[4].split("-")[0]
+    name = file["name"]
     text = _get_document_text(url_private)
     doc = nlp(text)
     sentences = []
@@ -49,6 +50,7 @@ def _process_document(file):
     word_positions = "|".join(word_positions)
     doc = schemas.DocumentCreate(
         team=team,
+        name=name,
         url=url_private,
         word_positions=word_positions,
         embeddings=pickle.dumps(doc_embeddings)
@@ -69,23 +71,167 @@ def handle_message_events(event, say):
         say(f"File {file['name']} processed!")
 
 
+def _get_most_similar_queries(queries, embedding):
+    scores = [
+        util.semantic_search(embedding, pickle.loads(obj.embedding), top_k=1)[0][0] for obj in queries
+    ]
+    if len(scores) == 0:
+        return
+    max_idx = max(range(len(scores)), key=lambda x: scores[x]["score"])
+    obj = queries[max_idx]
+    score = scores[max_idx]["score"]
+    return {
+        "obj": obj,
+        "score": score,
+    }
+
+
+def _get_most_similar_docs(docs, embedding):
+    scores = [
+        util.semantic_search(embedding, pickle.loads(obj.embeddings), top_k=1)[0][0] for obj in docs
+    ]
+    if len(scores) == 0:
+        return
+    max_idx = max(range(len(scores)), key=lambda x: scores[x]["score"])
+    obj = docs[max_idx]
+    score = scores[max_idx]["score"]
+    corpus_id = scores[max_idx]["corpus_id"]
+    return {
+        "obj": obj,
+        "score": score,
+        "corpus_id": corpus_id
+    }
+
+
+@app.action("save_answer")
+def save_answer(ack, body, say):
+    ack()
+    team = body["team"]["id"]
+    text = body["message"]["blocks"][1]["label"]["text"].split("Save Answer to ")[1]
+    embedding = pickle.dumps(search_model.encode([text]))
+    result = body["actions"][0]["value"]
+    evidence = body["message"]["blocks"][0]["text"]["text"]
+    query = schemas.QueryCreate(
+        team=team,
+        text=text,
+        embedding=embedding,
+        evidence=evidence,
+        result=result
+    )
+    crud.create_query(db, query)
+    say("Question and Answer added to knowledge base!")
+
+
+@app.action("update_answer")
+def update_answer(ack, body, say):
+    ack()
+    team = body["team"]["id"]
+    text = body["message"]["blocks"][0]["label"]["text"].split("Save Answer to ")[1]
+    query = crud.get_query_by_text(db, team, text)
+    id = query.id
+    update_fields = {"result": body["actions"][0]["value"]}
+    crud.update_query(db, id, update_fields)
+    say("Updated Answer!")
+
+
+@app.action("override")
+def verify_result(ack, body, say):
+    ack()
+    query = body["actions"][0]["value"]
+    say(blocks=[
+        {
+            "dispatch_action": True,
+            "type": "input",
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "update_answer"
+            },
+            "label": {
+                "type": "plain_text",
+                "text": f"Save Answer to {query}",
+                "emoji": True
+            }
+        }
+    ])
+
+
 @app.event("message")
 def handle_message(event, say):
     event_type = event.get("type")
-    text = event.get("text")
-    if event_type == "message" and text is not None:
+    query = event.get("text")
+    query_embedding = search_model.encode([query])
+    if event_type == "message" and query is not None:
         team = event["team"]
-        documents = crud.get_documents(db, team)
-        query_embedding = search_model.encode([text])
-        scores = [util.semantic_search(query_embedding, pickle.loads(doc.embeddings), top_k=1)[0][0] for doc in documents]
-        max_idx = max(range(len(scores)), key=lambda x: scores[x]["score"])
-        corpus_id = scores[max_idx]["corpus_id"]
-        doc = documents[max_idx]
-        start, end = doc.word_positions.split("|")[corpus_id].split("_")
-        private_url = doc.url
-        text = _get_document_text(private_url)
-        snippet = nlp(text)[int(start): int(end)].text
-        say(snippet)
+        queries = crud.get_queries(db, team)
+        most_similar_query = _get_most_similar_queries(queries, query_embedding)
+        if most_similar_query is not None and most_similar_query["score"] >= 0.4:
+            msq = most_similar_query["obj"]
+            say(blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": msq.evidence
+			        }
+		        },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "plain_text",
+                        "text": f"Saved Answer: {msq.result}",
+                        "emoji": True
+                    }
+		        },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "Override Answer"
+                            },
+                            "style": "danger",
+                            "value": msq.text,
+                            "action_id": "override"
+                        }
+                        
+                    ]
+				}
+            ])
+        else:
+            documents = crud.get_documents(db, team)
+            doc_obj = _get_most_similar_docs(documents, query_embedding)
+            doc = doc_obj["obj"]
+            corpus_id = doc_obj["corpus_id"]
+            start, end = doc.word_positions.split("|")[corpus_id].split("_")
+            private_url = doc.url
+            name = doc.name
+            text = _get_document_text(private_url)
+            snippet = nlp(text)[int(start): int(end)].text
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f'Found `{snippet}` from <{private_url}|{name}>'
+                    }
+                },
+                {
+                    "dispatch_action": True,
+                    "type": "input",
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "save_answer"
+                    },
+                    "label": {
+                        "type": "plain_text",
+                        "text": f"Save Answer to {query}",
+                        "emoji": True
+                    }
+                }
+            ]
+            say(blocks=blocks)
 
 api = FastAPI()
 
