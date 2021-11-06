@@ -2,7 +2,7 @@ version: "3.3"
 services:
 
   db:
-    image: postgres:12
+    image: postgres:latest
     volumes:
       - app-db-data:/var/lib/postgresql/data/pgdata
     env_file:

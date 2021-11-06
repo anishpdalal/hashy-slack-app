@@ -13,15 +13,24 @@ RUN apt update && \
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH="/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+ENV POSTGRES_HOST=
+ENV POSTGRES_PORT=
+ENV POSTGRES_USER=
+ENV POSTGRES_PASSWORD=
+ENV POSTGRES_DB=
+ENV SLACK_BOT_TOKEN=
+ENV SLACK_SIGNING_SECRET=
+
 COPY ./app/requirements.txt /app/requirements.txt
 
 RUN python3 -m pip install pip --upgrade
 RUN python3 -m pip install --no-cache-dir --upgrade -r /app/requirements.txt
 
 COPY ./app /app
-WORKDIR /app
 
 RUN useradd -m myuser
 USER myuser
 
-CMD ["uvicorn", "app.main:api", "--host", "0.0.0.0", "--reload", "--port", "3000"]
+WORKDIR /app
+
+CMD uvicorn app.main:api --host 0.0.0.0 --port $PORT
