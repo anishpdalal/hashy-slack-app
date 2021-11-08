@@ -1,9 +1,11 @@
 import pickle
 import os
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
+from slack_bolt.oauth.oauth_settings import OAuthSettings
+from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 import numpy as np
 import requests
 import spacy
@@ -11,8 +13,15 @@ from sentence_transformers import SentenceTransformer, util
 
 from app.db import crud, database, schemas
 
+installation_store = SQLAlchemyInstallationStore(
+    client_id=os.environ["SLACK_CLIENT_ID"],
+    engine=database.engine
+)
+oauth_settings = OAuthSettings(
+    installation_store=installation_store
+)
 
-app = App()
+app = App(oauth_settings=oauth_settings)
 app_handler = SlackRequestHandler(app)
 
 nlp = spacy.load("en_core_web_sm")
@@ -26,9 +35,13 @@ def handle_file_created_events(event, say):
     pass
 
 
-def _get_document_text(url):
+def _get_document_text(url, team):
+    bot = installation_store.find_bot(
+        enterprise_id=None,
+        team_id=team,
+    )
     headers = {
-        "Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"
+        "Authorization": f"Bearer {bot.bot_token}"
     }
     text = requests.get(url, headers=headers).text
     return text
@@ -36,9 +49,9 @@ def _get_document_text(url):
 
 def _process_document(file):
     url_private = file["url_private"]
-    team= url_private.split("/")[4].split("-")[0]
+    team = url_private.split("/")[4].split("-")[0]
     name = file["name"]
-    text = _get_document_text(url_private)
+    text = _get_document_text(url_private, team)
     doc = nlp(text)
     sentences = []
     word_positions = []
@@ -214,7 +227,7 @@ def handle_message(event, say):
             start, end = doc.word_positions.split("|")[corpus_id].split("_")
             private_url = doc.url
             name = doc.name
-            text = _get_document_text(private_url)
+            text = _get_document_text(private_url, team)
             snippet = nlp(text)[int(start): int(end)].text
             blocks = [
                 {
@@ -245,4 +258,14 @@ api = FastAPI()
 
 @api.post("/slack/events")
 async def endpoint(req: Request):
+    return await app_handler.handle(req)
+
+
+@api.get("/slack/install")
+async def install(req: Request):
+    return await app_handler.handle(req)
+
+
+@api.get("/slack/oauth_redirect")
+async def oauth_redirect(req: Request):
     return await app_handler.handle(req)
