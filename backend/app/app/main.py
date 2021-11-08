@@ -154,6 +154,13 @@ def verify_result(ack, body, say):
         }
     ])
 
+@app.event({
+    "type": "message",
+    "subtype": "message_deleted"
+})
+def handle_message_deleted(event, say):
+    pass
+
 
 @app.event("message")
 def handle_message(event, say):
