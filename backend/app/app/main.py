@@ -243,7 +243,7 @@ def handle_message(event, say):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f'Found `{snippet}` from <{private_url}|{name}>'
+                        "text": f'{snippet} \n\n Source: <{private_url}|{name}>'
                     }
                 },
                 {
