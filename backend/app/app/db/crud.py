@@ -49,3 +49,11 @@ def get_documents(db: Session, team: str):
     docs = db.query(models.Document).filter(models.Document.team == team).all()
     db.close()
     return docs
+
+
+def delete_document(db: Session, file_id: str):
+    db.query(models.Document).filter(
+        models.Document.file_id == file_id
+    ).delete()
+    db.commit()
+    db.close()

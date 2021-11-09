@@ -8,6 +8,7 @@ class Query(Base):
     id = Column(Integer, primary_key=True, index=True)
     team = Column(String, nullable=False)
     text = Column(Text, nullable=False)
+    user = Column(String, nullable=False)
     embedding = Column(PickleType, nullable=False)
     result = Column(Text, nullable=False)
     evidence = Column(Text, nullable=True)
@@ -20,6 +21,8 @@ class Query(Base):
 class Document(Base):
     id = Column(Integer, primary_key=True, index=True)
     team = Column(String, nullable=False)
+    user = Column(String, nullable=False)
+    file_id = Column(String, nullable=False)
     name = Column(String, nullable=False)
     word_positions = Column(Text, nullable=False)
     url = Column(String, nullable=False)

@@ -17,6 +17,9 @@ installation_store = SQLAlchemyInstallationStore(
     client_id=os.environ["SLACK_CLIENT_ID"],
     engine=database.engine
 )
+
+installation_store.create_tables()
+
 oauth_settings = OAuthSettings(
     installation_store=installation_store
 )
@@ -66,7 +69,9 @@ def _process_document(file):
         name=name,
         url=url_private,
         word_positions=word_positions,
-        embeddings=pickle.dumps(doc_embeddings)
+        embeddings=pickle.dumps(doc_embeddings),
+        file_id=file["id"],
+        user=file["user"]
     )
     crud.create_document(db, doc)
 
@@ -120,12 +125,14 @@ def _get_most_similar_docs(docs, embedding):
 def save_answer(ack, body, say):
     ack()
     team = body["team"]["id"]
+    user = body["user"]["id"]
     text = body["message"]["blocks"][1]["label"]["text"].split("Save Answer to ")[1]
     embedding = pickle.dumps(search_model.encode([text]))
     result = body["actions"][0]["value"]
     evidence = body["message"]["blocks"][0]["text"]["text"]
     query = schemas.QueryCreate(
         team=team,
+        user=user,
         text=text,
         embedding=embedding,
         evidence=evidence,
@@ -172,7 +179,9 @@ def verify_result(ack, body, say):
     "subtype": "message_deleted"
 })
 def handle_message_deleted(event, say):
-    pass
+    file_id = event["previous_message"]["files"][0]["id"]
+    crud.delete_document(db, file_id)
+    say("Document Deleted")
 
 
 @app.event("message")

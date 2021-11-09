@@ -8,6 +8,7 @@ class QueryBase(BaseModel):
     text: str
     result: str
     team: str
+    user: str
     embedding: bytes
     evidence: Optional[str] = None
 
@@ -31,6 +32,8 @@ class DocumentBase(BaseModel):
     word_positions: str
     embeddings: bytes
     url: str
+    user: str
+    file_id: str
 
 
 class DocumentCreate(DocumentBase):
