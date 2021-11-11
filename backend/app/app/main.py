@@ -263,6 +263,49 @@ def handle_message(event, say):
             ]
             say(blocks=blocks)
 
+
+@app.command("/hashy")
+def repeat_text(ack, respond, command):
+    ack()
+    if command.get("text") == "help":
+        respond({
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": ":question: *Why create create text snippets when using Hashy?*\n:point_right: Hashy searches against your team's text snippets "
+                        "and finds the most relevant section. The search result can be thought of as evidence for the provided answer or interpretation."
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": ":question: *Why provide answers when using Hashy?*\n:point_right: You can store answers to questions to provide additional context beyond return search result and provide a consistent "
+                        "answer to similar future queries by you or your team."
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": ":question: *How do I create a text snippet in Slack?*\n:point_right: Checkout this <https://slack.com/help/articles/204145658-Create-or-paste-code-snippets-in-Slack|documentation> straight from the source."
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": ":question: *I can't view the source text snippet returned by the result?*\n:point_right: The creator of the snippet needs to directly share it with you or more ideally with a public channel such as `#hashy-snippets`."
+                    }
+                },
+            ]
+        })
+    else:
+        respond("Sorry, command not recognized")
+
+
 @app.event("app_home_opened")
 def handle_app_home_opened(client, event, say):
     user_id = event["user"]
@@ -273,9 +316,16 @@ def handle_app_home_opened(client, event, say):
         )
         crud.create_logged_user(
             db, schemas.LoggedUserCreate(user_id=user_id)
+        ) 
+        say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
+            "I'm here to help you find and share knowledge across your organization!\n\n"
+            ":page_facing_up: To get started create a text snippet from the shortcut menu, paste in your contents, and share with Hashy\n\n"
+            ":mag: Search against your documents by DM'ing me or type in @Hashy followed by your query in other channels or conversations\n\n"
+            ":lower_left_fountain_pen: Write down the answer to the query so your future self and team will get consistent answers to important questions\n\n"
+            ":question: Type in `/hashy-help`\n\n"
+            ":bulb: I recommend creating a public channel like `#hashy-snippets` to share your snippets with so your team members can view them"
         )
-        say(f"Hi, <@{result['user']['name']}>  :wave:")
-   
+
 api = FastAPI()
 
 
