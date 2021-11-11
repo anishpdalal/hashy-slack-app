@@ -6,6 +6,7 @@ from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
 from slack_bolt.oauth.oauth_settings import OAuthSettings
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
+from slack_sdk import WebClient
 import numpy as np
 import requests
 import spacy
@@ -262,6 +263,19 @@ def handle_message(event, say):
             ]
             say(blocks=blocks)
 
+@app.event("app_home_opened")
+def handle_app_home_opened(client, event, say):
+    user_id = event["user"]
+    logged_user = crud.get_logged_user(db, user_id)
+    if logged_user is None:
+        result = client.users_info(
+            user=user_id
+        )
+        crud.create_logged_user(
+            db, schemas.LoggedUserCreate(user_id=user_id)
+        )
+        say(f"Hi, <@{result['user']['name']}>  :wave:")
+   
 api = FastAPI()
 
 

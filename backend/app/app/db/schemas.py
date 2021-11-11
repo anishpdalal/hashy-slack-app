@@ -47,3 +47,16 @@ class Document(DocumentBase):
 
     class Config:
         orm_mode = True
+
+
+class LoggedUserBase(BaseModel):
+    user_id: str
+
+class LoggedUserCreate(LoggedUserBase):
+    pass
+
+
+class LoggedUser(LoggedUserBase):
+    id: int
+    time_created: datetime
+    time_updated: datetime

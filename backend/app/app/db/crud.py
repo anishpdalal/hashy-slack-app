@@ -57,3 +57,18 @@ def delete_document(db: Session, file_id: str):
     ).delete()
     db.commit()
     db.close()
+
+
+def get_logged_user(db: Session, user_id: str):
+    user = db.query(models.LoggedUser).filter(models.LoggedUser.user_id == user_id).first()
+    db.close()
+    return user
+
+
+def create_logged_user(db: Session, user: schemas.LoggedUserCreate):
+    user = models.LoggedUser(**user.dict())
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    db.close()
+    return user
