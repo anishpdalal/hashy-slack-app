@@ -51,6 +51,19 @@ def get_documents(db: Session, team: str):
     return docs
 
 
+def get_document(db: Session, file_id: str):
+    doc = db.query(models.Document).filter(models.Document.file_id == file_id).first()
+    db.close()
+    return doc
+
+
+def update_document(db:Session, id: int, fields: Dict[str, Any]):
+    doc = db.query(models.Document).filter_by(id=id).update(fields)
+    db.commit()
+    db.close()
+    return doc
+
+
 def delete_document(db: Session, file_id: str):
     db.query(models.Document).filter(
         models.Document.file_id == file_id
