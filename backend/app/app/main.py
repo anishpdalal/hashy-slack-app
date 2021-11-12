@@ -230,34 +230,61 @@ def process_query(event, say, query):
         doc_obj = _get_most_similar_docs(documents, query_embedding)
         doc = doc_obj["obj"]
         corpus_id = doc_obj["corpus_id"]
-        start, end = doc.word_positions.split("|")[corpus_id].split("_")
-        private_url = doc.url
-        name = doc.name
-        text = _get_document_text(private_url, team)
-        snippet = nlp(text)[int(start): int(end)].text
-        blocks = [
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f'{snippet} \n\n Source: <{private_url}|{name}>'
-                }
-            },
-            {
-                "dispatch_action": True,
-                "type": "input",
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "save_answer"
+        score = doc_obj["score"]
+        if score >= 0.2:
+            start, end = doc.word_positions.split("|")[corpus_id].split("_")
+            private_url = doc.url
+            name = doc.name
+            text = _get_document_text(private_url, team)
+            snippet = nlp(text)[int(start): int(end)].text
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f'{snippet} \n\n Source: <{private_url}|{name}>'
+                    }
                 },
-                "label": {
-                    "type": "plain_text",
-                    "text": f"Save Answer to {query}",
-                    "emoji": True
+                {
+                    "dispatch_action": True,
+                    "type": "input",
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "save_answer"
+                    },
+                    "label": {
+                        "type": "plain_text",
+                        "text": f"Save Answer to {query}",
+                        "emoji": True
+                    }
                 }
-            }
-        ]
-        say(blocks=blocks)
+            ]
+            say(blocks=blocks)
+        else:
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "No matching document found"
+                    }
+                },
+                {
+                    "dispatch_action": True,
+                    "type": "input",
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "save_answer"
+                    },
+                    "label": {
+                        "type": "plain_text",
+                        "text": f"Save Answer to {query}",
+                        "emoji": True
+                    }
+                }
+            ]
+            say(blocks=blocks)
+            
 
 
 @app.event("app_mention")
@@ -273,6 +300,37 @@ def handle_message(event, say):
     query = event.get("text")
     if query is not None and channel_type == "im":
         process_query(event, say, query)
+
+
+@app.event("file_change")
+def handle_file_created_events(client, event):
+    file_id = event["file_id"]
+    document = crud.get_document(db, file_id)
+    if document is not None:
+        file = client.files_info(
+            file=file_id
+        )
+        file_name = file["file"]["name"]
+        private_url = file["file"]["url_private"]
+        team = document.team
+        text = _get_document_text(private_url, team)
+        doc = nlp(text)
+        sentences = []
+        word_positions = []
+        for sent in doc.sents:
+            sentences.append(sent.text)
+            start, end = sent.start, sent.end
+            word_positions.append(f"{start}_{end}")
+        doc_embeddings = search_model.encode(sentences)
+        word_positions = "|".join(word_positions)
+        embeddings = pickle.dumps(doc_embeddings)
+        update_fields = {
+            "embeddings": embeddings,
+            "word_positions": word_positions,
+            "name": file_name,
+            "url": private_url,
+        }
+        crud.update_document(db, document.id, update_fields)
 
 
 @app.command("/hashy")
