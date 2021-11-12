@@ -185,83 +185,94 @@ def handle_message_deleted(event, say):
     say("Document Deleted")
 
 
+def process_query(event, say, query):
+    query_embedding = search_model.encode([query])
+    team = event["team"]
+    queries = crud.get_queries(db, team)
+    most_similar_query = _get_most_similar_queries(queries, query_embedding)
+    if most_similar_query is not None and most_similar_query["score"] >= 0.4:
+        msq = most_similar_query["obj"]
+        say(blocks=[
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": msq.evidence
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"Saved Answer: {msq.result}",
+                    "emoji": True
+                }
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Override Answer"
+                        },
+                        "style": "danger",
+                        "value": msq.text,
+                        "action_id": "override"
+                    }
+                    
+                ]
+            }
+        ])
+    else:
+        documents = crud.get_documents(db, team)
+        doc_obj = _get_most_similar_docs(documents, query_embedding)
+        doc = doc_obj["obj"]
+        corpus_id = doc_obj["corpus_id"]
+        start, end = doc.word_positions.split("|")[corpus_id].split("_")
+        private_url = doc.url
+        name = doc.name
+        text = _get_document_text(private_url, team)
+        snippet = nlp(text)[int(start): int(end)].text
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f'{snippet} \n\n Source: <{private_url}|{name}>'
+                }
+            },
+            {
+                "dispatch_action": True,
+                "type": "input",
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "save_answer"
+                },
+                "label": {
+                    "type": "plain_text",
+                    "text": f"Save Answer to {query}",
+                    "emoji": True
+                }
+            }
+        ]
+        say(blocks=blocks)
+
+
+@app.event("app_mention")
+def handle_mentions(event, say):
+    query = event["text"].split("> ")[1]
+    if query is not None:
+        process_query(event, say, query)
+
+
 @app.event("message")
 def handle_message(event, say):
-    event_type = event.get("type")
+    channel_type = event.get("channel_type")
     query = event.get("text")
-    query_embedding = search_model.encode([query])
-    if event_type == "message" and query is not None:
-        team = event["team"]
-        queries = crud.get_queries(db, team)
-        most_similar_query = _get_most_similar_queries(queries, query_embedding)
-        if most_similar_query is not None and most_similar_query["score"] >= 0.4:
-            msq = most_similar_query["obj"]
-            say(blocks=[
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": msq.evidence
-			        }
-		        },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "plain_text",
-                        "text": f"Saved Answer: {msq.result}",
-                        "emoji": True
-                    }
-		        },
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "Override Answer"
-                            },
-                            "style": "danger",
-                            "value": msq.text,
-                            "action_id": "override"
-                        }
-                        
-                    ]
-				}
-            ])
-        else:
-            documents = crud.get_documents(db, team)
-            doc_obj = _get_most_similar_docs(documents, query_embedding)
-            doc = doc_obj["obj"]
-            corpus_id = doc_obj["corpus_id"]
-            start, end = doc.word_positions.split("|")[corpus_id].split("_")
-            private_url = doc.url
-            name = doc.name
-            text = _get_document_text(private_url, team)
-            snippet = nlp(text)[int(start): int(end)].text
-            blocks = [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f'{snippet} \n\n Source: <{private_url}|{name}>'
-                    }
-                },
-                {
-                    "dispatch_action": True,
-                    "type": "input",
-                    "element": {
-                        "type": "plain_text_input",
-                        "action_id": "save_answer"
-                    },
-                    "label": {
-                        "type": "plain_text",
-                        "text": f"Save Answer to {query}",
-                        "emoji": True
-                    }
-                }
-            ]
-            say(blocks=blocks)
+    if query is not None and channel_type == "im":
+        process_query(event, say, query)
 
 
 @app.command("/hashy")
@@ -274,7 +285,7 @@ def repeat_text(ack, respond, command):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": ":question: *Why create create text snippets when using Hashy?*\n:point_right: Hashy searches against your team's text snippets "
+                        "text": ":question: *Why create text snippets when using Hashy?*\n:point_right: Hashy searches against your team's text snippets "
                         "and finds the most relevant section. The search result can be thought of as evidence for the provided answer or interpretation."
                     }
                 },
@@ -320,7 +331,7 @@ def handle_app_home_opened(client, event, say):
         say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
             "I'm here to help you find and share knowledge across your organization!\n\n"
             ":page_facing_up: To get started create a text snippet from the shortcut menu, paste in your contents, and share with Hashy\n\n"
-            ":mag: Search against your documents by DM'ing me or type in @Hashy followed by your query in other channels or conversations\n\n"
+            ":mag: Search against your documents by DM'ing me or type in @Hashy followed by your query in channels\n\n"
             ":lower_left_fountain_pen: Write down the answer to the query so your future self and team will get consistent answers to important questions\n\n"
             ":question: Type in `/hashy-help`\n\n"
             ":bulb: I recommend creating a public channel like `#hashy-snippets` to share your snippets with so your team members can view them"
