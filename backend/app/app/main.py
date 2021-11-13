@@ -6,8 +6,6 @@ from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
 from slack_bolt.oauth.oauth_settings import OAuthSettings
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
-from slack_sdk import WebClient
-import numpy as np
 import requests
 import spacy
 from sentence_transformers import SentenceTransformer, util
@@ -45,7 +43,8 @@ def _get_document_text(url, team):
         team_id=team,
     )
     headers = {
-        "Authorization": f"Bearer {bot.bot_token}"
+        "Authorization": f"Bearer {bot.bot_token}",
+        "Content-Type": "text/html"
     }
     text = requests.get(url, headers=headers).text
     return text
@@ -76,8 +75,6 @@ def _process_document(file):
     )
     crud.create_document(db, doc)
 
-
-api = FastAPI()
 
 @app.event({
     "type": "message",
