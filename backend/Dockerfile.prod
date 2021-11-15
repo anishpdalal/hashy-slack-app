@@ -33,4 +33,4 @@ USER myuser
 
 WORKDIR /app
 
-CMD uvicorn app.main:api --host 0.0.0.0 --port $PORT
+CMD gunicorn -w 1 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:$PORT app.main:api
