@@ -1,3 +1,4 @@
+import json
 import logging
 import pickle
 import os
@@ -13,8 +14,7 @@ from sentence_transformers import SentenceTransformer, util
 
 from app.db import crud, database, schemas
 
-log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logging.conf')
-logging.config.fileConfig(log_file_path, disable_existing_loggers=False)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -192,11 +192,11 @@ def process_query(event, say, query):
     query_embedding = search_model.encode([query])
     team = event["team"]
     user = event["user"]
-    logger.info({
+    logger.info(json.dumps({
         "user": user,
         "team": team,
         "query": query
-    })
+    }))
     queries = crud.get_queries(db, team)
     most_similar_query = _get_most_similar_queries(queries, query_embedding)
     if most_similar_query is not None and most_similar_query["score"] >= 0.4:
