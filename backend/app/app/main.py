@@ -43,6 +43,16 @@ def handle_file_created_events(event, say):
     pass
 
 
+@app.event("file_deleted")
+def handle_file_deleted_events(body, logger):
+    pass
+
+
+@app.event("file_shared")
+def handle_file_shared_events(body, logger):
+    pass
+
+
 def _get_document_text(url, team):
     bot = installation_store.find_bot(
         enterprise_id=None,
@@ -88,7 +98,7 @@ def _process_document(file):
 })
 def handle_message_events(event, say):
     file = event["files"][0]
-    if file["mimetype"] == "text/plain":
+    if file["mimetype"] == "text/plain" and event["channel_type"] == "im":
         _process_document(file)
         say(f"File {file['name']} processed!")
 
@@ -184,9 +194,10 @@ def verify_result(ack, body, say):
 })
 def handle_message_deleted(event, say):
     file_id = event["previous_message"]["files"][0]["id"]
-    crud.delete_document(db, file_id)
-    say("Document Deleted")
-
+    doc = crud.get_document(db, file_id)
+    if doc is not None:
+        crud.delete_document(db, file_id)
+        
 
 def process_query(event, say, query):
     query_embedding = search_model.encode([query])
@@ -237,6 +248,31 @@ def process_query(event, say, query):
     else:
         documents = crud.get_documents(db, team)
         doc_obj = _get_most_similar_docs(documents, query_embedding)
+        if doc_obj is None:
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "No matching document found"
+                    }
+                },
+                {
+                    "dispatch_action": True,
+                    "type": "input",
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "save_answer"
+                    },
+                    "label": {
+                        "type": "plain_text",
+                        "text": f"Save Answer to {query}",
+                        "emoji": True
+                    }
+                }
+            ]
+            say(blocks=blocks)
+            return
         doc = doc_obj["obj"]
         corpus_id = doc_obj["corpus_id"]
         score = doc_obj["score"]
