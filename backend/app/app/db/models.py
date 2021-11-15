@@ -36,6 +36,8 @@ class Document(Base):
 class LoggedUser(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, nullable=False)
+    team_name = Column(String)
+    team_id = Column(String)
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

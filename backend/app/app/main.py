@@ -1,3 +1,4 @@
+import logging
 import pickle
 import os
 
@@ -11,6 +12,11 @@ import spacy
 from sentence_transformers import SentenceTransformer, util
 
 from app.db import crud, database, schemas
+
+log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logging.conf')
+logging.config.fileConfig(log_file_path, disable_existing_loggers=False)
+logger = logging.getLogger(__name__)
+
 
 installation_store = SQLAlchemyInstallationStore(
     client_id=os.environ["SLACK_CLIENT_ID"],
@@ -185,6 +191,12 @@ def handle_message_deleted(event, say):
 def process_query(event, say, query):
     query_embedding = search_model.encode([query])
     team = event["team"]
+    user = event["user"]
+    logger.info({
+        "user": user,
+        "team": team,
+        "query": query
+    })
     queries = crud.get_queries(db, team)
     most_similar_query = _get_most_similar_queries(queries, query_embedding)
     if most_similar_query is not None and most_similar_query["score"] >= 0.4:
@@ -380,15 +392,24 @@ def handle_app_home_opened(client, event, say):
         result = client.users_info(
             user=user_id
         )
+        team_id = result["user"]["team_id"]
+        team_info = client.team_info(
+            team=team_id
+        )
+        team_name = team_info["team"]["name"]
         crud.create_logged_user(
-            db, schemas.LoggedUserCreate(user_id=user_id)
+            db, schemas.LoggedUserCreate(
+                user_id=user_id,
+                team_id=team_id,
+                team_name=team_name
+            )
         ) 
         say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
             "I'm here to help you find and share knowledge across your organization!\n\n"
             ":page_facing_up: To get started create a text snippet from the shortcut menu, paste in your contents, and share with Hashy\n\n"
             ":mag: Search against your documents by DM'ing me or type in @Hashy followed by your query in channels\n\n"
             ":lower_left_fountain_pen: Write down the answer to the query so your future self and team will get consistent answers to important questions\n\n"
-            ":question: Type in `/hashy-help`\n\n"
+            ":question: Type in `/hashy help`\n\n"
             ":bulb: I recommend creating a public channel like `#hashy-snippets` to share your snippets with so your team members can view them"
         )
 

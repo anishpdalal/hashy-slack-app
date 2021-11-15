@@ -51,6 +51,9 @@ class Document(DocumentBase):
 
 class LoggedUserBase(BaseModel):
     user_id: str
+    team_id: Optional[str]
+    team_name: Optional[str]
+
 
 class LoggedUserCreate(LoggedUserBase):
     pass
