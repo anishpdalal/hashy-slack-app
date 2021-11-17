@@ -2,6 +2,7 @@ import json
 import logging
 import pickle
 import os
+import re
 
 from fastapi import FastAPI, Request
 from slack_bolt import App
@@ -9,7 +10,6 @@ from slack_bolt.adapter.fastapi import SlackRequestHandler
 from slack_bolt.oauth.oauth_settings import OAuthSettings
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 import requests
-import spacy
 from sentence_transformers import SentenceTransformer, util
 
 from app.db import crud, database, schemas
@@ -32,7 +32,7 @@ oauth_settings = OAuthSettings(
 app = App(oauth_settings=oauth_settings)
 app_handler = SlackRequestHandler(app)
 
-nlp = spacy.load("en_core_web_sm")
+REGEX_EXP = r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s"
 search_model = SentenceTransformer('msmarco-distilbert-base-v4')
 db = database.SessionLocal()
 
@@ -71,20 +71,12 @@ def _process_document(file):
     team = url_private.split("/")[4].split("-")[0]
     name = file["name"]
     text = _get_document_text(url_private, team)
-    doc = nlp(text)
-    sentences = []
-    word_positions = []
-    for sent in doc.sents:
-        sentences.append(sent.text)
-        start, end = sent.start, sent.end
-        word_positions.append(f"{start}_{end}")
+    sentences = re.split(REGEX_EXP, text)
     doc_embeddings = search_model.encode(sentences)
-    word_positions = "|".join(word_positions)
     doc = schemas.DocumentCreate(
         team=team,
         name=name,
         url=url_private,
-        word_positions=word_positions,
         embeddings=pickle.dumps(doc_embeddings),
         file_id=file["id"],
         user=file["user"]
@@ -276,12 +268,15 @@ def process_query(event, say, query):
         doc = doc_obj["obj"]
         corpus_id = doc_obj["corpus_id"]
         score = doc_obj["score"]
-        if score >= 0.2:
-            start, end = doc.word_positions.split("|")[corpus_id].split("_")
+        if score >= 0.3:
             private_url = doc.url
             name = doc.name
             text = _get_document_text(private_url, team)
-            snippet = nlp(text)[int(start): int(end)].text
+            sentences = re.split(REGEX_EXP, text)
+            if len(sentences) == 0:
+                snippet = sentences[corpus_id]
+            else:
+                snippet = " ".join(sentences[corpus_id-1:corpus_id+2])
             blocks = [
                 {
                     "type": "section",
@@ -348,7 +343,7 @@ def handle_message(event, say):
 
 
 @app.event("file_change")
-def handle_file_created_events(client, event):
+def handle_file_created_events(client, event, say):
     file_id = event["file_id"]
     document = crud.get_document(db, file_id)
     if document is not None:
@@ -359,23 +354,16 @@ def handle_file_created_events(client, event):
         private_url = file["file"]["url_private"]
         team = document.team
         text = _get_document_text(private_url, team)
-        doc = nlp(text)
-        sentences = []
-        word_positions = []
-        for sent in doc.sents:
-            sentences.append(sent.text)
-            start, end = sent.start, sent.end
-            word_positions.append(f"{start}_{end}")
+        sentences = re.split(REGEX_EXP, text)
         doc_embeddings = search_model.encode(sentences)
-        word_positions = "|".join(word_positions)
         embeddings = pickle.dumps(doc_embeddings)
         update_fields = {
             "embeddings": embeddings,
-            "word_positions": word_positions,
             "name": file_name,
             "url": private_url,
         }
         crud.update_document(db, document.id, update_fields)
+        logger.info(f"{file_name} updated")
 
 
 @app.command("/hashy")

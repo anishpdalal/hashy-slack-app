@@ -24,7 +24,7 @@ class Document(Base):
     user = Column(String, nullable=False)
     file_id = Column(String, nullable=False)
     name = Column(String, nullable=False)
-    word_positions = Column(Text, nullable=False)
+    word_positions = Column(Text)
     url = Column(String, nullable=False)
     embeddings = Column(PickleType, nullable=False)
     time_created = Column(
