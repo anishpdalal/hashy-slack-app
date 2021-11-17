@@ -10,7 +10,7 @@ services:
     environment:
       - PGDATA=/var/lib/postgresql/data/pgdata
 
-  backend:
+  backend-dev:
     ports:
       - "3000:3000"
     volumes:

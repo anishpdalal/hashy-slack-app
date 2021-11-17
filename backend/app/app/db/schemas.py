@@ -29,7 +29,7 @@ class Query(QueryBase):
 class DocumentBase(BaseModel):
     team: str
     name: str
-    word_positions: str
+    word_positions: Optional[str]
     embeddings: bytes
     url: str
     user: str
