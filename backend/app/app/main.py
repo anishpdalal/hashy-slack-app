@@ -90,9 +90,10 @@ def _process_document(file):
 })
 def handle_message_events(event, say):
     file = event["files"][0]
-    if file["mimetype"] == "text/plain" and event["channel_type"] == "im":
+    if file["mimetype"] == "text/plain":
+        say(f"Processing File {file['name']}")
         _process_document(file)
-        say(f"File {file['name']} processed!")
+        say(f"Finished processing File {file['name']}")
 
 
 def _get_most_similar_queries(queries, embedding):
