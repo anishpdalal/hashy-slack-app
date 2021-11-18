@@ -369,30 +369,30 @@ def handle_file_created_events(client, event, say):
 @app.command("/hashy")
 def repeat_text(ack, respond, command):
     ack()
-    if command.get("text") == "help":
+    command_text = command.get("text")
+    if command_text == "help":
         respond({
             "blocks": [
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": ":question: *Why create text snippets when using Hashy?*\n:point_right: Hashy searches against your team's text snippets "
-                        "and finds the most relevant section. The search result can be thought of as evidence for the provided answer or interpretation."
+                        "text": "Checkout this <https://www.loom.com/share/80845208ecd343e2a5efddb2158ae69d|demo> for a more detailed walked-through and explanation of Hashy"
                     }
                 },
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": ":question: *Why provide answers when using Hashy?*\n:point_right: You can store answers to questions to provide additional context beyond return search result and provide a consistent "
-                        "answer to similar future queries by you or your team."
+                        "text": ":question: *How do I use Hashy in a public channel?*\n:point_right: Mention `@Hashy` followed by your query."
                     }
                 },
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": ":question: *How do I create a text snippet in Slack?*\n:point_right: Checkout this <https://slack.com/help/articles/204145658-Create-or-paste-code-snippets-in-Slack|documentation> straight from the source."
+                        "text": ":question: *How do I create a text snippet in Slack?*\n:point_right: Checkout this <https://slack.com/help/articles/204145658-Create-or-paste-code-snippets-in-Slack|documentation> straight from the source. "
+                        "Alternatively you can upload a plain text file when you are DMing Hashy."
                     }
                 },
                 {
@@ -405,7 +405,8 @@ def repeat_text(ack, respond, command):
             ]
         })
     else:
-        respond("Sorry, command not recognized")
+        event = {"team": command["team_id"], "user": command["user_id"]}
+        process_query(event, respond, command_text)
 
 
 @app.event("app_home_opened")
@@ -429,12 +430,12 @@ def handle_app_home_opened(client, event, say):
             )
         ) 
         say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
-            "I'm here to help you find and share knowledge across your organization!\n\n"
-            ":page_facing_up: To get started create a text snippet from the shortcut menu, paste in your contents, and share with Hashy\n\n"
-            ":mag: Search against your documents by DM'ing me or type in @Hashy followed by your query in channels\n\n"
-            ":lower_left_fountain_pen: Write down the answer to the query so your future self and team will get consistent answers to important questions\n\n"
-            ":question: Type in `/hashy help`\n\n"
-            ":bulb: I recommend creating a public channel like `#hashy-snippets` to share your snippets with so your team members can view them"
+            "I'm here to help you find and share knowledge across your organization. Let's get started with an example!\n\n"
+            "1. Type `/` to pull up the shortcut menu and search for `Create a text snippet`. Title the snippet `Sales Agreement` and add the following text to the Content Box: `Company XYZ bought 100 units in October 2021`\n\n"
+            "2. Message Hashy the following: How many units did Company XYZ purchase?\n\n"
+            "3. Congrats! You now know what you need to use Hashy. Want to help your team further? Provide your own answer or interpretation\n\n"
+            "Checkout this <https://www.loom.com/share/80845208ecd343e2a5efddb2158ae69d|demo> for a more detailed walked-through and explanation of Hashy\n\n"
+            "Type in `/hashy help` to get more information about using Hashy.\n\n"
         )
 
 api = FastAPI()
