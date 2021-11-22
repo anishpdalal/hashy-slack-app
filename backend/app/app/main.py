@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import pickle
@@ -5,6 +6,7 @@ import os
 import re
 
 from fastapi import FastAPI, Request
+import pdfminer.high_level
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
 from slack_bolt.oauth.oauth_settings import OAuthSettings
@@ -15,6 +17,7 @@ from sentence_transformers import SentenceTransformer, util
 from app.db import crud, database, schemas
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("pdfminer").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -53,7 +56,7 @@ def handle_file_shared_events(body, logger):
     pass
 
 
-def _get_document_text(url, team):
+def _get_txt_document_text(url, team):
     bot = installation_store.find_bot(
         enterprise_id=None,
         team_id=team,
@@ -66,11 +69,11 @@ def _get_document_text(url, team):
     return text
 
 
-def _process_document(file):
+def _process_plain_text(file):
     url_private = file["url_private"]
     team = url_private.split("/")[4].split("-")[0]
     name = file["name"]
-    text = _get_document_text(url_private, team)
+    text = _get_txt_document_text(url_private, team)
     sentences = re.split(REGEX_EXP, text)
     doc_embeddings = search_model.encode(sentences)
     doc = schemas.DocumentCreate(
@@ -84,16 +87,56 @@ def _process_document(file):
     crud.create_document(db, doc)
 
 
+def _get_pdf_document_text(url, team):
+    bot = installation_store.find_bot(
+        enterprise_id=None,
+        team_id=team,
+    )
+    headers = {
+        "Authorization": f"Bearer {bot.bot_token}",
+    }
+    byte_str = requests.get(url, headers=headers).content
+    pdf_memory_file = io.BytesIO()
+    pdf_memory_file.write(byte_str)
+    text = pdfminer.high_level.extract_text(pdf_memory_file)
+    return text
+
+
+def _process_pdf(file):
+    private_url = file["url_private"]
+    team = private_url.split("/")[4].split("-")[0]
+    name = file["name"]
+    text = _get_pdf_document_text(private_url, team)
+    sentences = re.split(REGEX_EXP, text)
+    doc_embeddings = search_model.encode(sentences)
+    doc = schemas.DocumentCreate(
+        team=team,
+        name=name,
+        url=private_url,
+        embeddings=pickle.dumps(doc_embeddings),
+        file_id=file["id"],
+        user=file["user"]
+    )
+    crud.create_document(db, doc)
+
+
 @app.event({
     "type": "message",
     "subtype": "file_share"
 })
-def handle_message_events(event, say):
+def handle_message_file_share(event, say):
     file = event["files"][0]
-    if file["mimetype"] == "text/plain":
-        say(f"Processing File {file['name']}")
-        _process_document(file)
-        say(f"Finished processing File {file['name']}")
+    mimetype = file["mimetype"]
+    filetype = file["filetype"]
+    say(f"Processing File {file['name']}")
+    if mimetype == "text/plain":
+        _process_plain_text(file)
+    elif mimetype == "application/pdf":
+        _process_pdf(file)
+    elif filetype == "docx" and "converted_pdf" in file:
+        file["url_private"] = file["converted_pdf"]
+        _process_pdf(file)
+    say(f"Finished processing File {file['name']}")
 
 
 def _get_most_similar_queries(queries, embedding):
@@ -272,7 +315,10 @@ def process_query(event, say, query):
         if score >= 0.3:
             private_url = doc.url
             name = doc.name
-            text = _get_document_text(private_url, team)
+            if name.endswith(".pdf") or name.endswith(".docx"):
+                text = _get_pdf_document_text(private_url, team)
+            else:
+                text = _get_txt_document_text(private_url, team)
             sentences = re.split(REGEX_EXP, text)
             if len(sentences) == 0:
                 snippet = sentences[corpus_id]
@@ -354,7 +400,7 @@ def handle_file_created_events(client, event, say):
         file_name = file["file"]["name"]
         private_url = file["file"]["url_private"]
         team = document.team
-        text = _get_document_text(private_url, team)
+        text = _get_txt_document_text(private_url, team)
         sentences = re.split(REGEX_EXP, text)
         doc_embeddings = search_model.encode(sentences)
         embeddings = pickle.dumps(doc_embeddings)
