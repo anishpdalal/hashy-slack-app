@@ -10,6 +10,7 @@ import pdfminer.high_level
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
 from slack_bolt.oauth.oauth_settings import OAuthSettings
+from slack_sdk.web import WebClient
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 import requests
 from sentence_transformers import SentenceTransformer, util
@@ -176,7 +177,7 @@ def save_answer(ack, body, say):
     ack()
     team = body["team"]["id"]
     user = body["user"]["id"]
-    text = body["message"]["blocks"][1]["label"]["text"].split("Save Answer to ")[1]
+    text = body["message"]["blocks"][1]["text"]["text"].split("Query: ")[1]
     embedding = pickle.dumps(search_model.encode([text]))
     result = body["actions"][0]["value"]
     evidence = body["message"]["blocks"][0]["text"]["text"]
@@ -196,7 +197,7 @@ def save_answer(ack, body, say):
 def update_answer(ack, body, say):
     ack()
     team = body["team"]["id"]
-    text = body["message"]["blocks"][0]["label"]["text"].split("Save Answer to ")[1]
+    text = body["message"]["blocks"][0]["text"]["text"].split("Query: ")[1]
     query = crud.get_query_by_text(db, team, text)
     id = query.id
     update_fields = {"result": body["actions"][0]["value"]}
@@ -210,6 +211,13 @@ def verify_result(ack, body, say):
     query = body["actions"][0]["value"]
     say(blocks=[
         {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Query: {query}"
+            }
+        },
+        {
             "dispatch_action": True,
             "type": "input",
             "element": {
@@ -218,7 +226,7 @@ def verify_result(ack, body, say):
             },
             "label": {
                 "type": "plain_text",
-                "text": f"Save Answer to {query}",
+                "text": "Have a way to improve the answer? Save it here:",
                 "emoji": True
             }
         }
@@ -248,19 +256,37 @@ def process_query(event, say, query):
     most_similar_query = _get_most_similar_queries(queries, query_embedding)
     if most_similar_query is not None and most_similar_query["score"] >= 0.4:
         msq = most_similar_query["obj"]
+        last_modified = msq.time_updated if msq.time_updated else msq.time_created
+        source = msq.evidence.split("Source: ")[1]
+        bot = installation_store.find_bot(
+            enterprise_id=None,
+            team_id=team,
+        )
+        client = WebClient(token=bot.bot_token)
+        result = client.users_info(
+            user=user
+        )
         say(blocks=[
             {
                 "type": "section",
                 "text": {
+                    "type": "plain_text",
+                    "text": f"Saved Answer: {msq.result}",
+                    "emoji": True
+                }
+            },
+            {
+                "type": "section",
+                "text": {
                     "type": "mrkdwn",
-                    "text": msq.evidence
+                    "text": f"Source: {source}"
                 }
             },
             {
                 "type": "section",
                 "text": {
                     "type": "plain_text",
-                    "text": f"Saved Answer: {msq.result}",
+                    "text": f"Last Updated by @{result['user']['name']} on {last_modified.month}/{last_modified.day}/{last_modified.year}",
                     "emoji": True
                 }
             },
@@ -294,6 +320,13 @@ def process_query(event, say, query):
                     }
                 },
                 {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"Query: {query}"
+                    }
+                },
+                {
                     "dispatch_action": True,
                     "type": "input",
                     "element": {
@@ -302,7 +335,7 @@ def process_query(event, say, query):
                     },
                     "label": {
                         "type": "plain_text",
-                        "text": f"Save Answer to {query}",
+                        "text": f"Have an answer? Save it here:",
                         "emoji": True
                     }
                 }
@@ -333,6 +366,13 @@ def process_query(event, say, query):
                     }
                 },
                 {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"Query: {query}"
+                    }
+                },
+                {
                     "dispatch_action": True,
                     "type": "input",
                     "element": {
@@ -341,7 +381,7 @@ def process_query(event, say, query):
                     },
                     "label": {
                         "type": "plain_text",
-                        "text": f"Save Answer to {query}",
+                        "text": f"Have a better answer? Save it here:",
                         "emoji": True
                     }
                 }
@@ -357,6 +397,13 @@ def process_query(event, say, query):
                     }
                 },
                 {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"Query: {query}"
+                    }
+                },
+                {
                     "dispatch_action": True,
                     "type": "input",
                     "element": {
@@ -365,7 +412,7 @@ def process_query(event, say, query):
                     },
                     "label": {
                         "type": "plain_text",
-                        "text": f"Save Answer to {query}",
+                        "text": f"Have an answer? Save it here:",
                         "emoji": True
                     }
                 }
