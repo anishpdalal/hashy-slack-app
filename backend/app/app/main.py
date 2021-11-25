@@ -1,4 +1,5 @@
 import io
+import itertools
 import json
 import logging
 import pickle
@@ -140,7 +141,7 @@ def handle_message_file_share(event, say):
     say(f"Finished processing File {file['name']}")
 
 
-def _get_most_similar_queries(queries, embedding):
+def _get_most_similar_query(queries, embedding):
     scores = [
         util.semantic_search(embedding, pickle.loads(obj.embedding), top_k=1)[0][0] for obj in queries
     ]
@@ -155,7 +156,7 @@ def _get_most_similar_queries(queries, embedding):
     }
 
 
-def _get_most_similar_docs(docs, embedding):
+def _get_most_similar_doc(docs, embedding):
     scores = [
         util.semantic_search(embedding, pickle.loads(obj.embeddings), top_k=1)[0][0] for obj in docs
     ]
@@ -170,6 +171,34 @@ def _get_most_similar_docs(docs, embedding):
         "score": score,
         "corpus_id": corpus_id
     }
+
+
+def _get_k_most_similar_docs(docs, embedding, k=3):
+    scores = list(itertools.chain(*[
+        util.semantic_search(embedding, pickle.loads(obj.embeddings), top_k=k)[0] for obj in docs
+    ]))
+    sorted_idx = sorted(range(len(scores)), key=lambda x: scores[x]["score"], reverse=True)
+    snippets = []
+    for idx in sorted_idx[:k]:
+        doc_idx = idx // k
+        doc = docs[doc_idx]
+        name = doc.name
+        private_url = doc.url
+        team = doc.team
+        if name.endswith(".pdf") or name.endswith(".docx"):
+            text = _get_pdf_document_text(private_url, team)
+        else:
+            text = _get_txt_document_text(private_url, team)
+
+        sentences = re.split(REGEX_EXP, text)
+        corpus_id = scores[idx]["corpus_id"]
+        if len(sentences) == 0:
+            snippet = sentences[corpus_id]
+        else:
+            snippet = " ".join(sentences[corpus_id-1:corpus_id+2])
+        text = f'{snippet} \n\n Source: <{private_url}|{name}>'
+        snippets.append(text)
+    return snippets
 
 
 @app.action("save_answer")
@@ -243,6 +272,39 @@ def handle_message_deleted(event, say):
         crud.delete_document(db, file_id)
         
 
+@app.action("view_more_results")
+def view_more_results(ack, body, client):
+    ack()
+    query = body["actions"][0]["value"]
+    team = body["team"]["id"]
+    logger.info(team)
+    embedding = search_model.encode([query])
+    documents = crud.get_documents(db, team)
+    snippets = _get_k_most_similar_docs(documents, embedding)
+    blocks = []
+    for idx, snippet in enumerate(snippets):
+        if idx != 0:
+            blocks.append({"type": "divider"})
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": snippet
+            }
+        })
+    client.views_open(
+        trigger_id=body["trigger_id"],
+        view={
+            "type": "modal",
+            "title": {
+                "type": "plain_text",
+                "text": "Additional Results",
+                "emoji": True
+            },
+            "blocks": blocks
+        }
+    )
+
 def process_query(event, say, query):
     query_embedding = search_model.encode([query])
     team = event["team"]
@@ -253,7 +315,7 @@ def process_query(event, say, query):
         "query": query
     }))
     queries = crud.get_queries(db, team)
-    most_similar_query = _get_most_similar_queries(queries, query_embedding)
+    most_similar_query = _get_most_similar_query(queries, query_embedding)
     if most_similar_query is not None and most_similar_query["score"] >= 0.4:
         msq = most_similar_query["obj"]
         last_modified = msq.time_updated if msq.time_updated else msq.time_created
@@ -283,6 +345,21 @@ def process_query(event, say, query):
                 }
             },
             {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "View More Results",
+                            "emoji": True
+                        },
+                        "value": query,
+                        "action_id": "view_more_results"
+                    }
+                ]
+		    },
+            {
                 "type": "section",
                 "text": {
                     "type": "plain_text",
@@ -309,7 +386,7 @@ def process_query(event, say, query):
         ])
     else:
         documents = crud.get_documents(db, team)
-        doc_obj = _get_most_similar_docs(documents, query_embedding)
+        doc_obj = _get_most_similar_doc(documents, query_embedding)
         if doc_obj is None:
             blocks = [
                 {
@@ -365,6 +442,21 @@ def process_query(event, say, query):
                         "text": f'{snippet} \n\n Source: <{private_url}|{name}>'
                     }
                 },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "View More Results",
+                                "emoji": True
+                            },
+                            "value": query,
+                            "action_id": "view_more_results"
+                        }
+                    ]
+		        },
                 {
                     "type": "section",
                     "text": {
