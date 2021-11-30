@@ -207,7 +207,7 @@ def save_answer(ack, body, say):
     ack()
     team = body["team"]["id"]
     user = body["user"]["id"]
-    text = body["message"]["blocks"][1]["text"]["text"].split("Query: ")[1]
+    text = [block["text"]["text"].split("Query: ")[1] for block in body["message"]["blocks"] if "Query:" in block.get("text", {}).get("text", "")][0]
     embedding = pickle.dumps(search_model.encode([text]))
     result = body["actions"][0]["value"]
     evidence = body["message"]["blocks"][0]["text"]["text"]
@@ -433,21 +433,19 @@ def process_query(event, say, query):
             if len(sentences) == 0:
                 snippet = sentences[corpus_id]
             else:
-                snippet = " ".join(sentences[corpus_id-1:corpus_id+2])
-            if team == "T02KCNMCUHE" or team == "T02MGVB1HL5":
                 snippet = " ".join(sentences[corpus_id:corpus_id+2])
-                snippet_processed = " ".join(snippet.split("\n")).strip()
-                response = openai.Completion.create(
-                    engine="curie",
-                    prompt=f"Original: The Company and the Founders will provide the Investors with customary representations and warranties examples of which are set out in Appendix 4 and the Founders will provide the Investors with customary non-competition, non-solicitation and confidentiality undertakings.\nSummary: The Company and its Founders will provide the usual assurances and guarantees on facts about the business. The founders will also agree not to work for competitors, poach employees or customers when they leave the startup, and respect confidentiality.\n###\nOriginal: One immediately obvious and enormous area for Bitcoin-based innovation is international remittance. Every day, hundreds of millions of low-income people go to work in hard jobs in foreign countries to make money to send back to their families in their home countries – over $400 billion in total annually, according to the World Bank.\nSummary: Bitcoin can be an innovation for sending money overseas. The market opportunity is large. Workers send over $400 billion annually to their families in their home countries. \n###\nOriginal: In the event of an initial public offering of the Company's shares on a US stock exchange the Investors shall be entitled to registration rights customary in transactions of this type (including two demand rights and unlimited shelf and piggy-back rights), with the expenses paid by the Company.\nSummary: If the Company does an IPO in the USA, investors have the usual rights to include their shares in the public offering and the costs of d doing this will be covered by the Company.\n###\nOriginal: Finally, a fourth interesting use case is public payments. This idea first came to my attention in a news article a few months ago. A random spectator at a televised sports event held up a placard with a QR code and the text “Send me Bitcoin!” He received $25,000 in Bitcoin in the first 24 hours, all from people he had never met. This was the first time in history that you could see someone holding up a sign, in person or on TV or in a photo, and then send them money with two clicks on your smartphone: take the photo of the QR code on the sign, and click to send the money.\nSummary: Public payments is an interesting use case for Bitcoin. A person collected $25,000 in Bitcoin from strangers after holding up a QR code. It was the first time in history such an event occured.\n###\nOriginal: {snippet_processed}\n",
-                    temperature=0.1,
-                    max_tokens=64,
-                    top_p=1,
-                    frequency_penalty=0,
-                    presence_penalty=0,
-                    stop=["\n"]
-                )
-                snippet = response["choices"][0]["text"].split("Summary: ")[1]
+            snippet_processed = " ".join(snippet.split("\n")).strip()
+            response = openai.Completion.create(
+                engine="curie",
+                prompt=f"Original: The Company and the Founders will provide the Investors with customary representations and warranties examples of which are set out in Appendix 4 and the Founders will provide the Investors with customary non-competition, non-solicitation and confidentiality undertakings.\nSummary: The Company and its Founders will provide the usual assurances and guarantees on facts about the business. The founders will also agree not to work for competitors, poach employees or customers when they leave the startup, and respect confidentiality.\n###\nOriginal: One immediately obvious and enormous area for Bitcoin-based innovation is international remittance. Every day, hundreds of millions of low-income people go to work in hard jobs in foreign countries to make money to send back to their families in their home countries – over $400 billion in total annually, according to the World Bank.\nSummary: Bitcoin can be an innovation for sending money overseas. The market opportunity is large. Workers send over $400 billion annually to their families in their home countries. \n###\nOriginal: In the event of an initial public offering of the Company's shares on a US stock exchange the Investors shall be entitled to registration rights customary in transactions of this type (including two demand rights and unlimited shelf and piggy-back rights), with the expenses paid by the Company.\nSummary: If the Company does an IPO in the USA, investors have the usual rights to include their shares in the public offering and the costs of d doing this will be covered by the Company.\n###\nOriginal: Finally, a fourth interesting use case is public payments. This idea first came to my attention in a news article a few months ago. A random spectator at a televised sports event held up a placard with a QR code and the text “Send me Bitcoin!” He received $25,000 in Bitcoin in the first 24 hours, all from people he had never met. This was the first time in history that you could see someone holding up a sign, in person or on TV or in a photo, and then send them money with two clicks on your smartphone: take the photo of the QR code on the sign, and click to send the money.\nSummary: Public payments is an interesting use case for Bitcoin. A person collected $25,000 in Bitcoin from strangers after holding up a QR code. It was the first time in history such an event occured.\n###\nOriginal: {snippet_processed}\n",
+                temperature=0,
+                max_tokens=24,
+                top_p=1,
+                frequency_penalty=1,
+                presence_penalty=0,
+                stop=["\n"]
+            )
+            snippet = response["choices"][0]["text"].split("Summary: ")[1]
             blocks = [
                 {
                     "type": "section",
