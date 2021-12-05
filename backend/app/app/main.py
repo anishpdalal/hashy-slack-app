@@ -6,6 +6,7 @@ import pickle
 import os
 import re
 
+import boto3
 from fastapi import FastAPI, Request
 import openai
 import pdfminer.high_level
@@ -43,6 +44,9 @@ search_model = SentenceTransformer('msmarco-distilbert-base-v4')
 db = database.SessionLocal()
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
+sqs = boto3.resource("sqs", region_name="us-east-1")
+queue = sqs.get_queue_by_name(QueueName=os.getenv("SQS_QUEUE_NAME"))
+
 
 @app.event("file_created")
 def handle_file_created_events(event, say):
@@ -59,6 +63,11 @@ def handle_file_shared_events(body, logger):
     pass
 
 
+@app.event("file_change")
+def handle_file_created_events(client, event, say):
+    pass
+
+
 def _get_txt_document_text(url, team):
     bot = installation_store.find_bot(
         enterprise_id=None,
@@ -70,24 +79,6 @@ def _get_txt_document_text(url, team):
     }
     text = requests.get(url, headers=headers).text
     return text
-
-
-def _process_plain_text(file):
-    url_private = file["url_private"]
-    team = url_private.split("/")[4].split("-")[0]
-    name = file["name"]
-    text = _get_txt_document_text(url_private, team)
-    sentences = re.split(REGEX_EXP, text)
-    doc_embeddings = search_model.encode(sentences)
-    doc = schemas.DocumentCreate(
-        team=team,
-        name=name,
-        url=url_private,
-        embeddings=pickle.dumps(doc_embeddings),
-        file_id=file["id"],
-        user=file["user"]
-    )
-    crud.create_document(db, doc)
 
 
 def _get_pdf_document_text(url, team):
@@ -105,41 +96,35 @@ def _get_pdf_document_text(url, team):
     return text
 
 
-def _process_pdf(file):
-    private_url = file["url_private"]
-    team = private_url.split("/")[4].split("-")[0]
-    name = file["name"]
-    text = _get_pdf_document_text(private_url, team)
-    sentences = re.split(REGEX_EXP, text)
-    doc_embeddings = search_model.encode(sentences)
-    doc = schemas.DocumentCreate(
-        team=team,
-        name=name,
-        url=private_url,
-        embeddings=pickle.dumps(doc_embeddings),
-        file_id=file["id"],
-        user=file["user"]
-    )
-    crud.create_document(db, doc)
-
-
 @app.event({
     "type": "message",
     "subtype": "file_share"
 })
 def handle_message_file_share(event, say):
-    file = event["files"][0]
-    mimetype = file["mimetype"]
-    filetype = file["filetype"]
-    say(f"Processing File {file['name']}")
-    if mimetype == "text/plain":
-        _process_plain_text(file)
-    elif mimetype == "application/pdf":
-        _process_pdf(file)
-    elif filetype == "docx" and "converted_pdf" in file:
-        file["url_private"] = file["converted_pdf"]
-        _process_pdf(file)
-    say(f"Finished processing File {file['name']}")
+    channel = event["channel"]
+    for file in event["files"]:
+        mimetype = file["mimetype"]
+        filetype = file["filetype"]
+        file_id = file["id"]
+        user = file["user"]
+        converted_pdf = file.get("converted_pdf")
+        url = file["url_private"] if converted_pdf is None else converted_pdf
+        file_name = file["name"]
+        team = url.split("/")[4].split("-")[0]
+        message = {
+            "channel": channel,
+            "mimetype": mimetype,
+            "filetype": filetype,
+            "file_id": file_id,
+            "user": user,
+            "converted_pdf": converted_pdf,
+            "url": url,
+            "file_name": file_name,
+            "team": team
+        }
+        logger.info(message)
+        say(f"Processing File {file_name}")
+        queue.send_message(MessageBody=json.dumps(message))
 
 
 def _get_most_similar_query(queries, embedding):
@@ -541,30 +526,6 @@ def handle_message(event, say):
     query = event.get("text")
     if query is not None and channel_type == "im":
         process_query(event, say, query)
-
-
-@app.event("file_change")
-def handle_file_created_events(client, event, say):
-    file_id = event["file_id"]
-    document = crud.get_document(db, file_id)
-    if document is not None:
-        file = client.files_info(
-            file=file_id
-        )
-        file_name = file["file"]["name"]
-        private_url = file["file"]["url_private"]
-        team = document.team
-        text = _get_txt_document_text(private_url, team)
-        sentences = re.split(REGEX_EXP, text)
-        doc_embeddings = search_model.encode(sentences)
-        embeddings = pickle.dumps(doc_embeddings)
-        update_fields = {
-            "embeddings": embeddings,
-            "name": file_name,
-            "url": private_url,
-        }
-        crud.update_document(db, document.id, update_fields)
-        logger.info(f"{file_name} updated")
 
 
 @app.command("/hashy")
