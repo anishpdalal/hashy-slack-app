@@ -1,0 +1,10 @@
+awslambdaric
+boto3
+openai
+pdfminer.six
+protobuf
+psycopg2-binary
+sentence-transformers
+slack-bolt
+SQLAlchemy
+torch
