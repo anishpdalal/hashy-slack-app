@@ -22,15 +22,14 @@ logger.setLevel(logging.INFO)
 user = os.environ["POSTGRES_USER"]
 password = os.environ["POSTGRES_PASSWORD"]
 host = os.environ["POSTGRES_HOST"]
-db = os.environ["POSTGRES_DB"]
+database = os.environ["POSTGRES_DB"]
 port = os.environ["POSTGRES_PORT"]
 
 REGEX_EXP = r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s"
 
-SQLALCHEMY_DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{db}"
+SQLALCHEMY_DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{database}"
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-db = SessionLocal()
 installation_store = SQLAlchemyInstallationStore(
     client_id=os.environ["SLACK_CLIENT_ID"],
     engine=engine
@@ -121,18 +120,24 @@ def handler(event, context):
             continue
         sentences = re.split(REGEX_EXP, text)
         doc_embeddings = search_model.encode(sentences)
-        doc = Document(**{
-            "team": team,
-            "name": file_name,
-            "user": user,
-            "url": url,
-            "embeddings": pickle.dumps(doc_embeddings),
-            "file_id": file_id, 
-        })
-        db.add(doc)
-        db.commit()
-        db.refresh(doc)
-        db.close()
+        db = SessionLocal()
+        try:
+            doc = Document(**{
+                "team": team,
+                "name": file_name,
+                "user": user,
+                "url": url,
+                "embeddings": pickle.dumps(doc_embeddings),
+                "file_id": file_id, 
+            })
+            db.add(doc)
+            db.commit()
+            db.refresh(doc)
+        except:
+            db.rollback()
+            raise
+        finally:
+            db.close()
         bot = installation_store.find_bot(
             enterprise_id=None,
             team_id=team,

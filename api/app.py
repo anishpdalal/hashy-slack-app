@@ -25,13 +25,12 @@ logger.setLevel(logging.INFO)
 user = os.environ["POSTGRES_USER"]
 password = os.environ["POSTGRES_PASSWORD"]
 host = os.environ["POSTGRES_HOST"]
-db = os.environ["POSTGRES_DB"]
+database = os.environ["POSTGRES_DB"]
 port = os.environ["POSTGRES_PORT"]
 
-SQLALCHEMY_DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{db}"
+SQLALCHEMY_DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{database}"
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-db = SessionLocal()
 installation_store = SQLAlchemyInstallationStore(
     client_id=os.environ["SLACK_CLIENT_ID"],
     engine=engine
@@ -83,7 +82,6 @@ class Document(Base):
 
 def _get_queries(db, team):
     queries = db.query(Query).filter(Query.team == team).all()
-    db.close()
     return queries
 
 
@@ -104,7 +102,6 @@ def _get_most_similar_query(queries, embedding):
 
 def _get_documents(db, team):
     docs = db.query(Document).filter(Document.team == team).all()
-    db.close()
     return docs
 
 
@@ -190,9 +187,16 @@ def handler(event, context):
     elif path == "/answer":
         team = body["team"]
         query = body["query"]
-        queries = _get_queries(db, team)
-        query_embedding = search_model.encode([query])
-        msq = _get_most_similar_query(queries, query_embedding)
+        db = SessionLocal()
+        try:
+            queries = _get_queries(db, team)
+            query_embedding = search_model.encode([query])
+            msq = _get_most_similar_query(queries, query_embedding)
+        except:
+            db.rollback()
+            raise
+        finally:
+            db.close()
         if msq:
             user = msq.user
             bot = installation_store.find_bot(
@@ -214,8 +218,15 @@ def handler(event, context):
                 "result": msq.result
             }]
         else:
-            docs = _get_documents(db, team)
-            results = _get_k_most_similar_docs(docs, query_embedding)
+            db = SessionLocal()
+            try:
+                docs = _get_documents(db, team)
+                results = _get_k_most_similar_docs(docs, query_embedding)
+            except:
+                db.rollback()
+                raise
+            finally:
+                db.close()
             if len(results) == 1:
                 snippet_processed = results[0]["result"]
                 response = openai.Completion.create(
@@ -242,11 +253,18 @@ def handler(event, context):
     
     elif path == "/search":
         team = body["team"]
-        docs = _get_documents(db, team)
-        k = body.get("count", 1)
-        query = body["query"]
-        query_embedding = search_model.encode([query])
-        results = _get_k_most_similar_docs(docs, query_embedding, k=k)
+        db = SessionLocal()
+        try:
+            docs = _get_documents(db, team)
+            k = body.get("count", 1)
+            query = body["query"]
+            query_embedding = search_model.encode([query])
+            results = _get_k_most_similar_docs(docs, query_embedding, k=k)
+        except:
+            db.rollback()
+            raise
+        finally:
+            db.close()
         return {
             "statusCode": 200,
             "body": json.dumps(results),
@@ -271,10 +289,16 @@ def handler(event, context):
                 "result": result
             }
         )
-        db.add(query)
-        db.commit()
-        db.refresh(query)
-        db.close()
+        db = SessionLocal()
+        try:
+            db.add(query)
+            db.commit()
+            db.refresh(query)
+        except:
+            db.rollback()
+            raise
+        finally:
+            db.close()
         return {
             "statusCode": 200,
             "body": "success",
