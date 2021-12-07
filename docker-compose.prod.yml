@@ -6,7 +6,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile.prod
   
-  ml-prod:
+  indexer:
     build:
       context: ./indexer
       dockerfile: Dockerfile

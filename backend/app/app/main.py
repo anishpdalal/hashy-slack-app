@@ -8,7 +8,6 @@ import requests
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
 from slack_bolt.oauth.oauth_settings import OAuthSettings
-from slack_sdk.web import WebClient
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 
 from app.db import crud, database, schemas
@@ -32,7 +31,6 @@ oauth_settings = OAuthSettings(
 app = App(oauth_settings=oauth_settings)
 app_handler = SlackRequestHandler(app)
 
-db = database.SessionLocal()
 sqs = boto3.resource("sqs", region_name="us-east-1")
 queue = sqs.get_queue_by_name(QueueName=os.getenv("SQS_QUEUE_NAME"))
 
@@ -113,10 +111,18 @@ def update_answer(ack, body, say):
     ack()
     team = body["team"]["id"]
     text = body["message"]["blocks"][0]["text"]["text"].split("Query: ")[1]
-    query = crud.get_query_by_text(db, team, text)
-    id = query.id
-    update_fields = {"result": body["actions"][0]["value"]}
-    crud.update_query(db, id, update_fields)
+    db = database.SessionLocal()
+    try:
+        query = crud.get_query_by_text(db, team, text)
+        id = query.id
+        update_fields = {"result": body["actions"][0]["value"]}
+        crud.update_query(db, id, update_fields)
+        db.commit()
+    except:
+        db.rollback()
+        raise
+    finally:
+        db.close()
     say("Updated Answer!")
 
 
@@ -153,9 +159,17 @@ def verify_result(ack, body, say):
 })
 def handle_message_deleted(event, say):
     file_id = event["previous_message"]["files"][0]["id"]
-    doc = crud.get_document(db, file_id)
-    if doc is not None:
-        crud.delete_document(db, file_id)
+    db = database.SessionLocal()
+    try:
+        doc = crud.get_document(db, file_id)
+        if doc is not None:
+            crud.delete_document(db, file_id)
+        db.commit()
+    except:
+        db.rollback()
+        raise
+    finally:
+        db.close()
         
 
 @app.action("view_more_results")
@@ -375,31 +389,41 @@ def repeat_text(ack, respond, command):
 @app.event("app_home_opened")
 def handle_app_home_opened(client, event, say):
     user_id = event["user"]
-    logged_user = crud.get_logged_user(db, user_id)
-    if logged_user is None:
-        result = client.users_info(
-            user=user_id
-        )
-        team_id = result["user"]["team_id"]
-        team_info = client.team_info(
-            team=team_id
-        )
-        team_name = team_info["team"]["name"]
-        crud.create_logged_user(
-            db, schemas.LoggedUserCreate(
-                user_id=user_id,
-                team_id=team_id,
-                team_name=team_name
+    db = database.SessionLocal()
+    try:
+        logged_user = crud.get_logged_user(db, user_id)
+        if logged_user is None:
+            result = client.users_info(
+                user=user_id
             )
-        ) 
-        say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
-            "I'm here to help you find and share knowledge across your organization. Let's get started with an example!\n\n"
-            "1. Type `/` to pull up the shortcut menu and search for `Create a text snippet`. Title the snippet `Sales Agreement` and add the following text to the Content Box: `Company XYZ bought 100 units in October 2021`\n\n"
-            "2. Message Hashy the following: How many units did Company XYZ purchase?\n\n"
-            "3. Congrats! You now know what you need to use Hashy. Want to help your team further? Provide your own answer or interpretation\n\n"
-            "Checkout this <https://www.loom.com/share/80845208ecd343e2a5efddb2158ae69d|demo> for a more detailed walked-through and explanation of Hashy\n\n"
-            "Type in `/hashy help` to get more information about using Hashy.\n\n"
-        )
+            team_id = result["user"]["team_id"]
+            team_info = client.team_info(
+                team=team_id
+            )
+            team_name = team_info["team"]["name"]
+            user = crud.create_logged_user(
+                db, schemas.LoggedUserCreate(
+                    user_id=user_id,
+                    team_id=team_id,
+                    team_name=team_name
+                )
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
+                "I'm here to help you find and share knowledge across your organization. Let's get started with an example!\n\n"
+                "1. Type `/` to pull up the shortcut menu and search for `Create a text snippet`. Title the snippet `Sales Agreement` and add the following text to the Content Box: `Company XYZ bought 100 units in October 2021`\n\n"
+                "2. Message Hashy the following: How many units did Company XYZ purchase?\n\n"
+                "3. Congrats! You now know what you need to use Hashy. Want to help your team further? Provide your own answer or interpretation\n\n"
+                "Checkout this <https://www.loom.com/share/80845208ecd343e2a5efddb2158ae69d|demo> for a more detailed walked-through and explanation of Hashy\n\n"
+                "Type in `/hashy help` to get more information about using Hashy.\n\n"
+            )
+    except:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 api = FastAPI()
 
