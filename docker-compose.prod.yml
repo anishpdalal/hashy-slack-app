@@ -10,3 +10,8 @@ services:
     build:
       context: ./indexer
       dockerfile: Dockerfile
+  
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
