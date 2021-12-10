@@ -80,6 +80,19 @@ class Document(Base):
     time_updated = Column(DateTime(timezone=True), onupdate=func.now())
 
 
+class NotionToken(Base):
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False)
+    team = Column(String, nullable=False)
+    notion_user_id = Column(String, nullable=False)
+    access_token = Column(String, nullable=False)
+    time_created = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    bot_id = Column(String, nullable=False)
+    workspace_id = Column(String, nullable=False)
+
+
 def _get_queries(db, team):
     queries = db.query(Query).filter(Query.team == team).all()
     return queries
@@ -133,24 +146,72 @@ def _get_pdf_document_text(url, team):
     return text
 
 
+def _get_notion_document_text(file_id, user):
+    db = SessionLocal()
+    try:
+        token = db.query(NotionToken).filter(NotionToken.user_id == user).first().access_token
+        child_blocks = requests.get(
+            f"https://api.notion.com/v1/blocks/{file_id}/children",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Notion-Version": "2021-08-16"
+            }
+        ).json()
+        text = []
+        todos = []
+        for block in child_blocks["results"]:
+            if block["type"] == "paragraph":
+                for snippet in block["paragraph"]["text"]:
+                    text.append(snippet["text"]["content"])
+            elif block["type"] == "callout":
+                for snippet in block["callout"]["text"]:
+                    text.append(snippet["text"]["content"])
+            elif block["type"] == "to_do":
+                for snippet in block["to_do"]["text"]:
+                    todos.append(snippet["text"]["content"])
+            elif block["type"] == "bulleted_list_item":
+                for snippet in block["bulleted_list_item"]["text"]:
+                    todos.append(snippet["text"]["content"])
+            elif block["type"] == "numbered_list_item":
+                for snippet in block["numbered_list_item"]["text"]:
+                    todos.append(snippet["text"]["content"])
+            else:
+                pass
+        todos_text = ". ".join(todos)
+        text.append(todos_text)
+        processed_text = " ".join(" ".join(text).encode("ascii", "ignore").decode().strip().split())
+    except:
+        raise
+    finally:
+        db.close()
+    return processed_text
+
+
 def _get_k_most_similar_docs(docs, embedding, k=1):
     if len(docs) == 0:
         return
-    scores = list(itertools.chain(*[
-        util.semantic_search(embedding, pickle.loads(obj.embeddings), top_k=k)[0] for obj in docs
-    ]))
+    scores = []
+    doc_idx = []
+    for idx, obj in enumerate(docs):
+        res = util.semantic_search(embedding, pickle.loads(obj.embeddings), top_k=k)[0]
+        scores.append(res)
+        doc_idx.extend([idx] * len(res))
+    scores = list(itertools.chain(*scores))
     sorted_idx = sorted(range(len(scores)), key=lambda x: scores[x]["score"], reverse=True)
     results = []
     for idx in sorted_idx[:k]:
         score = scores[idx]["score"]
         if score >= 0.3:
-            doc_idx = idx // k
-            doc = docs[doc_idx]
+            doc = docs[doc_idx[idx]]
             name = doc.name
             private_url = doc.url
             team = doc.team
+            user = doc.user
+            file_id = doc.file_id
             if name.endswith(".pdf") or name.endswith(".docx"):
                 text = _get_pdf_document_text(private_url, team)
+            elif "notion.so" in doc.url:
+                text = _get_notion_document_text(file_id, user)
             else:
                 text = _get_txt_document_text(private_url, team)
 

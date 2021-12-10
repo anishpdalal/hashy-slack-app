@@ -64,6 +64,18 @@ class Document(Base):
     time_updated = Column(DateTime(timezone=True), onupdate=func.now())
 
 
+class NotionToken(Base):
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False)
+    team = Column(String, nullable=False)
+    notion_user_id = Column(String, nullable=False)
+    access_token = Column(String, nullable=False)
+    time_created = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    bot_id = Column(String, nullable=False)
+    workspace_id = Column(String, nullable=False)
+
 
 def _get_txt_document_text(url, team):
     bot = installation_store.find_bot(
@@ -93,21 +105,74 @@ def _get_pdf_document_text(url, team):
     return text
 
 
+NOTION_REQUEST_BODY = {
+    "sort": {
+        "direction": "descending",
+        "timestamp": "last_edited_time"
+    },
+    "filter": {
+        "property": "object",
+        "value": "page"
+    }
+}
+
+
+def _get_notion_document_text(file_id, user):
+    db = SessionLocal()
+    try:
+        token = db.query(NotionToken).filter(NotionToken.user_id == user).first().access_token
+        child_blocks = requests.get(
+            f"https://api.notion.com/v1/blocks/{file_id}/children",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Notion-Version": "2021-08-16"
+            }
+        ).json()
+        text = []
+        todos = []
+        for block in child_blocks["results"]:
+            if block["type"] == "paragraph":
+                for snippet in block["paragraph"]["text"]:
+                    text.append(snippet["text"]["content"])
+            elif block["type"] == "callout":
+                for snippet in block["callout"]["text"]:
+                    text.append(snippet["text"]["content"])
+            elif block["type"] == "to_do":
+                for snippet in block["to_do"]["text"]:
+                    todos.append(snippet["text"]["content"])
+            elif block["type"] == "bulleted_list_item":
+                for snippet in block["bulleted_list_item"]["text"]:
+                    todos.append(snippet["text"]["content"])
+            elif block["type"] == "numbered_list_item":
+                for snippet in block["numbered_list_item"]["text"]:
+                    todos.append(snippet["text"]["content"])
+            else:
+                pass
+        todos_text = ". ".join(todos)
+        text.append(todos_text)
+        processed_text = " ".join(" ".join(text).encode("ascii", "ignore").decode().strip().split())
+    except:
+        raise
+    finally:
+        db.close()
+    return processed_text
+
+
 def handler(event, context):
     for record in event['Records']:
         if isinstance(record["body"], str):
             payload = json.loads(record["body"])
         else:
             payload = record["body"]
+        logger.info(record['body'])
         file_name = payload["file_name"]
         url = payload["url"]
         team = payload["team"]
         user = payload["user"]
-        channel = payload["channel"]
+        channel = payload.get("channel")
         file_id = payload["file_id"]
-        logger.info(f"Processing File: {file_name} from Team: {team}")
         filetype = payload["filetype"]
-        mimetype = payload["mimetype"]
+        mimetype = payload.get("mimetype")
         converted_pdf = payload.get("converted_pdf", None)
         text = None
         if mimetype == "text/plain":
@@ -116,6 +181,10 @@ def handler(event, context):
             text = _get_pdf_document_text(url, team)
         elif filetype == "docx" and converted_pdf is not None:
             text = _get_pdf_document_text(url, team)
+        elif filetype == "notion":
+            text = _get_notion_document_text(file_id, user)
+            if not text:
+                continue
         else:
             continue
         sentences = re.split(REGEX_EXP, text)
@@ -138,12 +207,14 @@ def handler(event, context):
             raise
         finally:
             db.close()
-        bot = installation_store.find_bot(
-            enterprise_id=None,
-            team_id=team,
-        )
-        client = WebClient(token=bot.bot_token)
-        client.chat_postMessage(
-            channel=channel,
-            text=f"Finished processing File {file_name}"
-        )
+        
+        if channel:
+            bot = installation_store.find_bot(
+                enterprise_id=None,
+                team_id=team,
+            )
+            client = WebClient(token=bot.bot_token)
+            client.chat_postMessage(
+                channel=channel,
+                text=f"Finished processing File {file_name}"
+            )
