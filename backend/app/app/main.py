@@ -1,9 +1,10 @@
+import base64
 import json
 import logging
 import os
 
 import boto3
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 import requests
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
@@ -190,7 +191,7 @@ def view_more_results(ack, body, client):
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": result["result"]
+                "text": f"{result['result']}\n\n<{result['source']}|{result['name']}>"
             }
         })
     client.views_open(
@@ -384,6 +385,22 @@ def repeat_text(ack, respond, command):
                 },
             ]
         })
+    elif command_text == "notion":
+        user = command["user_id"]
+        team = command["team_id"]
+        notion_id = os.environ["NOTION_CLIENT_ID"]
+        redirect_uri = "https://794c-100-38-15-101.ngrok.io/notion/oauth_redirect"
+        respond({
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}|Add Notion>"
+                    }
+                }
+            ]
+        })
 
 
 @app.event("app_home_opened")
@@ -441,3 +458,90 @@ async def install(req: Request):
 @api.get("/slack/oauth_redirect")
 async def oauth_redirect(req: Request):
     return await app_handler.handle(req)
+
+
+@api.get("/notion/oauth_redirect")
+async def notion_oauth_redirect(code, state):
+    credential = f"{os.environ['NOTION_CLIENT_ID']}:{os.environ['NOTION_SECRET_KEY']}"
+    credential_bytes = credential.encode("ascii")
+    base64_bytes = base64.b64encode(credential_bytes)
+    base64_credential = base64_bytes.decode('ascii')
+    token_response = requests.post(
+        "https://api.notion.com/v1/oauth/token",
+        headers={
+            "Authorization": f"Basic {base64_credential}",
+            "Content-type": "application/json"
+        },
+        data=json.dumps(
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": "https://794c-100-38-15-101.ngrok.io/notion/oauth_redirect"
+            }
+        )
+    )
+    token_response = token_response.json()
+    db = database.SessionLocal()
+    try:
+        user_id, team_id = state.split("-")
+        notion_user_id = token_response["owner"]["user"]["id"]
+        access_token = token_response["access_token"]
+        bot_id = token_response["bot_id"]
+        workspace_id = token_response["workspace_id"]
+        token = crud.create_notion_token(schemas.NotionTokenCreate(
+            user_id=user_id,
+            team=team_id,
+            notion_user_id=notion_user_id,
+            access_token=access_token,
+            bot_id=bot_id,
+            workspace_id=workspace_id
+        ))
+        db.add(token)
+        db.commit()
+        db.refresh(token)
+    except:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+    
+    request_body = {
+        "sort": {
+            "direction": "descending",
+            "timestamp": "last_edited_time"
+        },
+        "filter": {
+            "property": "object",
+            "value": "page"
+        }
+    }
+    search_results = requests.post(
+        "https://api.notion.com/v1/search",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-type": "application/json",
+            "Notion-Version": "2021-08-16"
+        },
+        data=json.dumps(request_body)
+    ).json()["results"]
+
+    for res in search_results:
+        url = res["url"]
+        split_url = url.split("/")[-1].split("-")
+        if len(split_url) == 1:
+            file_name = "Untitled"
+        else:
+            file_name = " ".join(split_url[:-1])
+        page = {
+            "team": team_id,
+            "user": user_id,
+            "url": url,
+            "filetype": "notion",
+            "file_name": file_name,
+            "file_id": res["id"]
+        }
+        queue.send_message(MessageBody=json.dumps(page))
+
+
+    response = Response("success!")
+    return response

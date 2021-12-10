@@ -42,3 +42,16 @@ class LoggedUser(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     time_updated = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class NotionToken(Base):
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False)
+    team = Column(String, nullable=False)
+    notion_user_id = Column(String, nullable=False)
+    access_token = Column(String, nullable=False)
+    time_created = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    bot_id = Column(String, nullable=False)
+    workspace_id = Column(String, nullable=False)

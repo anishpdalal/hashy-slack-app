@@ -73,3 +73,8 @@ def get_logged_user(db: Session, user_id: str):
 def create_logged_user(db: Session, user: schemas.LoggedUserCreate):
     user = models.LoggedUser(**user.dict())
     return user
+
+
+def create_notion_token(token: schemas.NotionTokenCreate):
+    token = models.NotionToken(**token.dict())
+    return token

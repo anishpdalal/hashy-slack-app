@@ -63,3 +63,20 @@ class LoggedUser(LoggedUserBase):
     id: int
     time_created: datetime
     time_updated: datetime
+
+
+class NotionTokenBase(BaseModel):
+    user_id: str
+    team: str
+    notion_user_id: str
+    access_token: str
+    bot_id: str
+    workspace_id: str
+
+
+class NotionTokenCreate(NotionTokenBase):
+    pass
+
+
+class NotionToken(NotionTokenBase):
+    time_created: datetime
