@@ -389,7 +389,7 @@ def repeat_text(ack, respond, command):
         user = command["user_id"]
         team = command["team_id"]
         notion_id = os.environ["NOTION_CLIENT_ID"]
-        redirect_uri = "https://794c-100-38-15-101.ngrok.io/notion/oauth_redirect"
+        redirect_uri = os.environ["NOTION_REDIRECT_URI"]
         respond({
             "blocks": [
                 {
@@ -476,7 +476,7 @@ async def notion_oauth_redirect(code, state):
             {
                 "grant_type": "authorization_code",
                 "code": code,
-                "redirect_uri": "https://794c-100-38-15-101.ngrok.io/notion/oauth_redirect"
+                "redirect_uri": os.environ["NOTION_REDIRECT_URI"]
             }
         )
     )
@@ -488,17 +488,23 @@ async def notion_oauth_redirect(code, state):
         access_token = token_response["access_token"]
         bot_id = token_response["bot_id"]
         workspace_id = token_response["workspace_id"]
-        token = crud.create_notion_token(schemas.NotionTokenCreate(
-            user_id=user_id,
-            team=team_id,
-            notion_user_id=notion_user_id,
-            access_token=access_token,
-            bot_id=bot_id,
-            workspace_id=workspace_id
-        ))
-        db.add(token)
-        db.commit()
-        db.refresh(token)
+        fields = {
+            "user_id": user_id,
+            "team": team_id,
+            "notion_user_id": notion_user_id,
+            "access_token": access_token,
+            "bot_id": bot_id,
+            "workspace_id": workspace_id
+        }
+        token = crud.get_notion_token(db, user_id)
+        if token:
+            crud.update_notion_token(db, token.id, fields)
+            db.commit()
+        else:
+            token = crud.create_notion_token(schemas.NotionTokenCreate(**fields))
+            db.add(token)
+            db.commit()
+            db.refresh(token)
     except:
         db.rollback()
         raise

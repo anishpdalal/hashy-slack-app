@@ -146,10 +146,10 @@ def _get_pdf_document_text(url, team):
     return text
 
 
-def _get_notion_document_text(file_id, user):
+def _get_notion_document_text(file_id, team):
     db = SessionLocal()
     try:
-        token = db.query(NotionToken).filter(NotionToken.user_id == user).first().access_token
+        token = db.query(NotionToken).filter(NotionToken.team == team).first().access_token
         child_blocks = requests.get(
             f"https://api.notion.com/v1/blocks/{file_id}/children",
             headers={
@@ -206,12 +206,11 @@ def _get_k_most_similar_docs(docs, embedding, k=1):
             name = doc.name
             private_url = doc.url
             team = doc.team
-            user = doc.user
             file_id = doc.file_id
             if name.endswith(".pdf") or name.endswith(".docx"):
                 text = _get_pdf_document_text(private_url, team)
             elif "notion.so" in doc.url:
-                text = _get_notion_document_text(file_id, user)
+                text = _get_notion_document_text(file_id, team)
             else:
                 text = _get_txt_document_text(private_url, team)
 
@@ -300,9 +299,12 @@ def handler(event, context):
                     presence_penalty=0,
                     stop=["\n"]
                 )
-                answer = response["choices"][0]["text"].split("Summary: ")[1]
-                answer = ".".join(answer.split(".")[:-1])
-                results[0]["result"] = answer
+                try:
+                    answer = response["choices"][0]["text"].split("Summary: ")[1]
+                    answer = ".".join(answer.split(".")[:-1])
+                    results[0]["result"] = answer
+                except:
+                    results[0]["result"] = snippet_processed
         return {
             "statusCode": 200,
             "body": json.dumps(results),

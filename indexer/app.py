@@ -190,18 +190,24 @@ def handler(event, context):
         sentences = re.split(REGEX_EXP, text)
         doc_embeddings = search_model.encode(sentences)
         db = SessionLocal()
+        fields = {
+            "team": team,
+            "name": file_name,
+            "user": user,
+            "url": url,
+            "embeddings": pickle.dumps(doc_embeddings),
+            "file_id": file_id, 
+        }
         try:
-            doc = Document(**{
-                "team": team,
-                "name": file_name,
-                "user": user,
-                "url": url,
-                "embeddings": pickle.dumps(doc_embeddings),
-                "file_id": file_id, 
-            })
-            db.add(doc)
-            db.commit()
-            db.refresh(doc)
+            doc = db.query(Document).filter(Document.file_id == file_id).first()
+            if doc:
+                db.query(Document).filter_by(id=doc.id).update(fields)
+                db.commit()
+            else:
+                doc = Document(**fields)
+                db.add(doc)
+                db.commit()
+                db.refresh(doc)
         except:
             db.rollback()
             raise

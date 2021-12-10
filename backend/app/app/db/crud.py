@@ -78,3 +78,12 @@ def create_logged_user(db: Session, user: schemas.LoggedUserCreate):
 def create_notion_token(token: schemas.NotionTokenCreate):
     token = models.NotionToken(**token.dict())
     return token
+
+
+def get_notion_token(db: Session, user_id: str):
+    token = db.query(models.NotionToken).filter(models.NotionToken.user_id == user_id).first()
+    return token
+
+
+def update_notion_token(db:Session, id: int, fields: Dict[str, Any]):
+    db.query(models.NotionToken).filter_by(id=id).update(fields)
