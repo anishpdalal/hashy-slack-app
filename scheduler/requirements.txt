@@ -1,0 +1,6 @@
+awslambdaric
+boto3
+psycopg2-binary
+pytz
+requests
+SQLAlchemy

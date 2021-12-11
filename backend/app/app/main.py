@@ -4,7 +4,8 @@ import logging
 import os
 
 import boto3
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
 import requests
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
@@ -549,5 +550,5 @@ async def notion_oauth_redirect(code, state):
         queue.send_message(MessageBody=json.dumps(page))
 
 
-    response = Response("success!")
+    response = RedirectResponse(f"https://app.slack.com/client/{team_id}")
     return response

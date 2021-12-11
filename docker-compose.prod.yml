@@ -15,3 +15,8 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile
+  
+  scheduler:
+    build:
+      context: ./scheduler
+      dockerfile: Dockerfile
