@@ -62,17 +62,6 @@ host = os.environ["POSTGRES_HOST"]
 database = os.environ["POSTGRES_DB"]
 port = os.environ["POSTGRES_PORT"]
 
-NOTION_REQUEST_BODY = {
-    "sort": {
-        "direction": "descending",
-        "timestamp": "last_edited_time"
-    },
-    "filter": {
-        "property": "object",
-        "value": "page"
-    }
-}
-
 
 def handler(event, context):
     SQLALCHEMY_DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{database}"
@@ -83,22 +72,47 @@ def handler(event, context):
     queue = sqs.get_queue_by_name(QueueName=os.getenv("SQS_QUEUE_NAME"))
     try:
         tokens = db.query(NotionToken).all()
+        doc_ids = []
+        returned_doc_ids = []
+        pages = []
         for token in tokens:
-            search_results = requests.post(
-                "https://api.notion.com/v1/search",
-                headers={
-                    "Authorization": f"Bearer {token.access_token}",
-                    "Content-type": "application/json",
-                    "Notion-Version": "2021-08-16"
+            team_doc_ids = [
+                doc.file_id for doc in db.query(Document).filter(
+                    Document.team == token.team,
+                    Document.url.contains("notion.so")
+                ).options(load_only(Document.file_id, Document.url)).all()
+            ]
+            doc_ids.extend(team_doc_ids)
+            search_results = []
+            request_body = {
+                "sort": {
+                    "direction": "descending",
+                    "timestamp": "last_edited_time"
                 },
-                data=json.dumps(NOTION_REQUEST_BODY)
-            ).json()["results"]
+                "filter": {
+                    "property": "object",
+                    "value": "page"
+                }
+            }
+            headers = {
+                "Authorization": f"Bearer {token.access_token}",
+                "Content-type": "application/json",
+                "Notion-Version": "2021-08-16"
+            }
+            api_url = "https://api.notion.com/v1/search"
+            results = requests.post(api_url, headers=headers, data=json.dumps(request_body)).json()
+            search_results.extend(results["results"])
+            while results.get("has_more"):
+                request_body["start_cursor"] = results["next_cursor"]
+                results = requests.post(api_url, headers=headers, data=json.dumps(request_body)).json()
+                search_results.extend(results["results"])
             for res in search_results:
+                returned_doc_ids.append(res["id"])
                 doc = db.query(Document).filter(Document.file_id == res["id"]).options(
                     load_only(Document.file_id, Document.time_created, Document.time_updated)).first()
                 if doc:
                     last_updated_notion = datetime.datetime.strptime(res["last_edited_time"], "%Y-%m-%dT%H:%M:%S.%fZ")
-                    last_updated_db = max(doc.time_created, doc.time_updated)
+                    last_updated_db = max(doc.time_created, doc.time_updated) if doc.time_updated else doc.time_created
                     last_updated_notion_aware = pytz.utc.localize(last_updated_notion)
                     if last_updated_db > last_updated_notion_aware:
                         continue
@@ -116,8 +130,20 @@ def handler(event, context):
                     "file_name": file_name,
                     "file_id": res["id"]
                 }
-                logger.info(page)
+                pages.append(page)
                 queue.send_message(MessageBody=json.dumps(page))
+
+        doc_ids = set(doc_ids)
+        returned_doc_ids = set(returned_doc_ids)
+        docs_to_delete = doc_ids - returned_doc_ids
+        for doc_id in docs_to_delete:
+            logger.info(f"Deleting {doc_id}")
+            db.query(Document).filter(Document.file_id == doc_id).delete()
+        db.commit()
+
+        for page in pages:
+            logger.info(f"Upserting {page}")
+            queue.send_message(MessageBody=json.dumps(page))
 
     except:
         raise

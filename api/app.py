@@ -150,16 +150,22 @@ def _get_notion_document_text(file_id, team):
     db = SessionLocal()
     try:
         token = db.query(NotionToken).filter(NotionToken.team == team).first().access_token
-        child_blocks = requests.get(
-            f"https://api.notion.com/v1/blocks/{file_id}/children",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Notion-Version": "2021-08-16"
-            }
-        ).json()
+        api_url = f"https://api.notion.com/v1/blocks/{file_id}/children"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Notion-Version": "2021-08-16"
+        }
+        params = {}
+        child_blocks = []
+        results = requests.get(api_url, headers=headers).json()
+        child_blocks.extend(results["results"])
+        while results.get("has_more"):
+            params["start_cursor"] = results["next_cursor"]
+            results = requests.get(api_url, params=params).json()
+            child_blocks.extend(results["results"])
         text = []
         todos = []
-        for block in child_blocks["results"]:
+        for block in child_blocks:
             if block["type"] == "paragraph":
                 for snippet in block["paragraph"]["text"]:
                     text.append(snippet["text"]["content"])
@@ -207,12 +213,16 @@ def _get_k_most_similar_docs(docs, embedding, k=1):
             private_url = doc.url
             team = doc.team
             file_id = doc.file_id
-            if name.endswith(".pdf") or name.endswith(".docx"):
-                text = _get_pdf_document_text(private_url, team)
-            elif "notion.so" in doc.url:
-                text = _get_notion_document_text(file_id, team)
-            else:
-                text = _get_txt_document_text(private_url, team)
+
+            try:
+                if name.endswith(".pdf") or name.endswith(".docx"):
+                    text = _get_pdf_document_text(private_url, team)
+                elif "notion.so" in doc.url:
+                    text = _get_notion_document_text(file_id, team)
+                else:
+                    text = _get_txt_document_text(private_url, team)
+            except:
+                continue
 
             sentences = re.split(REGEX_EXP, text)
             corpus_id = scores[idx]["corpus_id"]

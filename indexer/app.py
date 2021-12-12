@@ -121,16 +121,22 @@ def _get_notion_document_text(file_id, user):
     db = SessionLocal()
     try:
         token = db.query(NotionToken).filter(NotionToken.user_id == user).first().access_token
-        child_blocks = requests.get(
-            f"https://api.notion.com/v1/blocks/{file_id}/children",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Notion-Version": "2021-08-16"
-            }
-        ).json()
+        api_url = f"https://api.notion.com/v1/blocks/{file_id}/children"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Notion-Version": "2021-08-16"
+        }
+        params = {}
+        child_blocks = []
+        results = requests.get(api_url, headers=headers).json()
+        child_blocks.extend(results["results"])
+        while results.get("has_more"):
+            params["start_cursor"] = results["next_cursor"]
+            results = requests.get(api_url, params=params).json()
+            child_blocks.extend(results["results"])
         text = []
         todos = []
-        for block in child_blocks["results"]:
+        for block in child_blocks:
             if block["type"] == "paragraph":
                 for snippet in block["paragraph"]["text"]:
                     text.append(snippet["text"]["content"])
