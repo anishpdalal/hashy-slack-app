@@ -522,16 +522,22 @@ async def notion_oauth_redirect(code, state):
             "value": "page"
         }
     }
-    search_results = requests.post(
-        "https://api.notion.com/v1/search",
-        headers={
-            "Authorization": f"Bearer {access_token}",
-            "Content-type": "application/json",
-            "Notion-Version": "2021-08-16"
-        },
-        data=json.dumps(request_body)
-    ).json()["results"]
 
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-type": "application/json",
+        "Notion-Version": "2021-08-16"
+    }
+    api_url = "https://api.notion.com/v1/search"
+    search_results = []
+    results = requests.post(api_url, headers=headers, data=json.dumps(request_body)).json()
+    search_results.extend(results["results"])
+    while results.get("has_more"):
+        request_body["start_cursor"] = results["next_cursor"]
+        results = requests.post(api_url, headers=headers, data=json.dumps(request_body)).json()
+        search_results.extend(results["results"])
+
+    logger.info(f"Processing {len(search_results)} Documents")
     for res in search_results:
         url = res["url"]
         split_url = url.split("/")[-1].split("-")
