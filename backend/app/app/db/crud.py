@@ -1,6 +1,6 @@
 from typing import Any, Dict
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import load_only, Session
 from sqlalchemy.sql.expression import update
 
 from . import models, schemas
@@ -42,8 +42,9 @@ def create_document(db: Session, doc: schemas.DocumentCreate):
 
 
 def get_documents(db: Session, team: str):
-    docs = db.query(models.Document).filter(models.Document.team == team).all()
-    db.close()
+    docs = db.query(models.Document).filter(models.Document.team == team).options(
+        load_only(models.Document.name, models.Document.url)
+    ).all()
     return docs
 
 

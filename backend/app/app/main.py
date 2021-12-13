@@ -11,6 +11,7 @@ from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
 from slack_bolt.oauth.oauth_settings import OAuthSettings
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
+from slack_sdk.web import WebClient
 
 from app.db import crud, database, schemas
 
@@ -349,9 +350,15 @@ def handle_message(event, say):
 
 
 @app.command("/hashy")
-def repeat_text(ack, respond, command):
+def repeat_text(ack, respond, command, client):
     ack()
     command_text = command.get("text")
+    channel = command["channel_id"]
+    user = command["user_id"]
+    team = command["team_id"]
+    trigger_id = command["trigger_id"]
+    notion_id = os.environ["NOTION_CLIENT_ID"]
+    redirect_uri = os.environ["NOTION_REDIRECT_URI"]
     if command_text == "help":
         respond({
             "blocks": [
@@ -359,45 +366,58 @@ def repeat_text(ack, respond, command):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": "Checkout this <https://www.loom.com/share/80845208ecd343e2a5efddb2158ae69d|demo> for a more detailed walked-through and explanation of Hashy"
+                        "text": "To view documents processed by Hashy enter command `/hashy docs`"
                     }
                 },
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": ":question: *How do I use Hashy in a public channel?*\n:point_right: Mention `@Hashy` followed by your query."
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": ":question: *How do I create a text snippet in Slack?*\n:point_right: Checkout this <https://slack.com/help/articles/204145658-Create-or-paste-code-snippets-in-Slack|documentation> straight from the source. "
-                        "Alternatively you can upload a plain text file when you are DMing Hashy."
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": ":question: *I can't view the source text snippet returned by the result?*\n:point_right: The creator of the snippet needs to directly share it with you or more ideally with a public channel such as `#hashy-snippets`."
+                        "text": f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{channel}|Notion Integation>"
                     }
                 },
             ]
         })
+    elif command_text == "docs":
+        db = database.SessionLocal()
+        try:
+            docs = crud.get_documents(db, team)
+            blocks = []
+            for idx, doc in enumerate(docs):
+                if idx != 0:
+                    blocks.append({"type": "divider"})
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"<{doc.url}|{doc.name}>"
+                    }
+                })
+        except:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+        client.views_open(
+            trigger_id=trigger_id,
+            view={
+                "type": "modal",
+                "title": {
+                    "type": "plain_text",
+                    "text": "Additional Results",
+                    "emoji": True
+                },
+                "blocks": blocks
+            }
+        )
     elif command_text == "notion":
-        user = command["user_id"]
-        team = command["team_id"]
-        notion_id = os.environ["NOTION_CLIENT_ID"]
-        redirect_uri = os.environ["NOTION_REDIRECT_URI"]
         respond({
             "blocks": [
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}|Add Notion>"
+                        "text": f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{channel}|Add Notion>"
                     }
                 }
             ]
@@ -407,6 +427,7 @@ def repeat_text(ack, respond, command):
 @app.event("app_home_opened")
 def handle_app_home_opened(client, event, say):
     user_id = event["user"]
+    channel_id = event["channel"]
     db = database.SessionLocal()
     try:
         logged_user = crud.get_logged_user(db, user_id)
@@ -429,13 +450,13 @@ def handle_app_home_opened(client, event, say):
             db.add(user)
             db.commit()
             db.refresh(user)
+            notion_id = os.environ["NOTION_CLIENT_ID"]
+            redirect_uri = os.environ["NOTION_REDIRECT_URI"]
             say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
-                "I'm here to help you find and share knowledge across your organization. Let's get started with an example!\n\n"
-                "1. Type `/` to pull up the shortcut menu and search for `Create a text snippet`. Title the snippet `Sales Agreement` and add the following text to the Content Box: `Company XYZ bought 100 units in October 2021`\n\n"
-                "2. Message Hashy the following: How many units did Company XYZ purchase?\n\n"
-                "3. Congrats! You now know what you need to use Hashy. Want to help your team further? Provide your own answer or interpretation\n\n"
-                "Checkout this <https://www.loom.com/share/80845208ecd343e2a5efddb2158ae69d|demo> for a more detailed walked-through and explanation of Hashy\n\n"
-                "Type in `/hashy help` to get more information about using Hashy.\n\n"
+                f"1. Integrate with <https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user_id}-{team_id}-{channel_id}|Notion>\n\n"
+                "2. Check which docs have been loaded with `/hashy docs`\n\n"
+                "3. DM Hashy with your query or mention `@Hashy` with your query to search through your documents\n\n"
+                "Type in `/hashy help` for the list of different commands\n\n"
             )
     except:
         db.rollback()
@@ -484,7 +505,7 @@ async def notion_oauth_redirect(code, state):
     token_response = token_response.json()
     db = database.SessionLocal()
     try:
-        user_id, team_id = state.split("-")
+        user_id, team_id, channel_id = state.split("-")
         notion_user_id = token_response["owner"]["user"]["id"]
         access_token = token_response["access_token"]
         bot_id = token_response["bot_id"]
@@ -555,6 +576,15 @@ async def notion_oauth_redirect(code, state):
         }
         queue.send_message(MessageBody=json.dumps(page))
 
+    bot = installation_store.find_bot(
+        enterprise_id=None,
+        team_id=team_id,
+    )
+    client = WebClient(token=bot.bot_token)
+    client.chat_postMessage(
+        channel=channel_id,
+        text=f"Processing your Notion documents. Check which ones are finished with the `/hashy docs` command"
+    )
 
     response = RedirectResponse(f"https://app.slack.com/client/{team_id}")
     return response
