@@ -193,7 +193,7 @@ def _get_notion_document_text(file_id, user):
     return processed_text
 
 
-def _get_k_most_similar_docs(docs, embedding, k=1):
+def _get_k_most_similar_docs(docs, embedding, user, k=1):
     if len(docs) == 0:
         return
     scores = []
@@ -213,7 +213,6 @@ def _get_k_most_similar_docs(docs, embedding, k=1):
             private_url = doc.url
             team = doc.team
             file_id = doc.file_id
-            user = doc.user
 
             try:
                 if name.endswith(".pdf") or name.endswith(".docx"):
@@ -257,6 +256,7 @@ def handler(event, context):
         }
     elif path == "/answer":
         team = body["team"]
+        user = body["user"]
         query = body["query"]
         db = SessionLocal()
         try:
@@ -292,7 +292,7 @@ def handler(event, context):
             db = SessionLocal()
             try:
                 docs = _get_documents(db, team)
-                results = _get_k_most_similar_docs(docs, query_embedding)
+                results = _get_k_most_similar_docs(docs, query_embedding, user)
             except:
                 db.rollback()
                 raise
@@ -327,13 +327,14 @@ def handler(event, context):
     
     elif path == "/search":
         team = body["team"]
+        user = body["user"]
         db = SessionLocal()
         try:
             docs = _get_documents(db, team)
             k = body.get("count", 1)
             query = body["query"]
             query_embedding = search_model.encode([query])
-            results = _get_k_most_similar_docs(docs, query_embedding, k=k)
+            results = _get_k_most_similar_docs(docs, query_embedding, user, k=k)
         except:
             db.rollback()
             raise

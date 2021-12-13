@@ -180,9 +180,10 @@ def view_more_results(ack, body, client):
     ack()
     query = body["actions"][0]["value"]
     team = body["team"]["id"]
+    user = body["user"]["id"]
     results = requests.post(
         f"{os.environ['API_URL']}/search",
-        data=json.dumps({"team": team, "query": query, "count": 3})
+        data=json.dumps({"team": team, "query": query, "count": 3, "user": user})
     )
     results = json.loads(results.text)
     blocks = []
@@ -219,7 +220,7 @@ def answer_query(event, say, query):
     }))
     results = requests.post(
         f"{os.environ['API_URL']}/answer",
-        data=json.dumps({"team": team, "query": query})
+        data=json.dumps({"team": team, "query": query, "user": user})
     )
     results = json.loads(results.text)
     if len(results) == 0:
