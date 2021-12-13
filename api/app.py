@@ -146,10 +146,10 @@ def _get_pdf_document_text(url, team):
     return text
 
 
-def _get_notion_document_text(file_id, team):
+def _get_notion_document_text(file_id, user):
     db = SessionLocal()
     try:
-        token = db.query(NotionToken).filter(NotionToken.team == team).first().access_token
+        token = db.query(NotionToken).filter(NotionToken.user_id == user).first().access_token
         api_url = f"https://api.notion.com/v1/blocks/{file_id}/children"
         headers = {
             "Authorization": f"Bearer {token}",
@@ -213,12 +213,13 @@ def _get_k_most_similar_docs(docs, embedding, k=1):
             private_url = doc.url
             team = doc.team
             file_id = doc.file_id
+            user = doc.user
 
             try:
                 if name.endswith(".pdf") or name.endswith(".docx"):
                     text = _get_pdf_document_text(private_url, team)
                 elif "notion.so" in doc.url:
-                    text = _get_notion_document_text(file_id, team)
+                    text = _get_notion_document_text(file_id, user)
                 else:
                     text = _get_txt_document_text(private_url, team)
             except:

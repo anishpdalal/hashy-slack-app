@@ -356,7 +356,6 @@ def repeat_text(ack, respond, command, client):
     channel = command["channel_id"]
     user = command["user_id"]
     team = command["team_id"]
-    trigger_id = command["trigger_id"]
     notion_id = os.environ["NOTION_CLIENT_ID"]
     redirect_uri = os.environ["NOTION_REDIRECT_URI"]
     if command_text == "help":
@@ -366,60 +365,9 @@ def repeat_text(ack, respond, command, client):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": "To view documents processed by Hashy enter command `/hashy docs`"
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
                         "text": f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{channel}|Notion Integation>"
                     }
                 },
-            ]
-        })
-    elif command_text == "docs":
-        db = database.SessionLocal()
-        try:
-            docs = crud.get_documents(db, team)
-            blocks = []
-            for idx, doc in enumerate(docs):
-                if idx != 0:
-                    blocks.append({"type": "divider"})
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"<{doc.url}|{doc.name}>"
-                    }
-                })
-        except:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-        client.views_open(
-            trigger_id=trigger_id,
-            view={
-                "type": "modal",
-                "title": {
-                    "type": "plain_text",
-                    "text": "Additional Results",
-                    "emoji": True
-                },
-                "blocks": blocks
-            }
-        )
-    elif command_text == "notion":
-        respond({
-            "blocks": [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{channel}|Add Notion>"
-                    }
-                }
             ]
         })
 
@@ -454,8 +402,7 @@ def handle_app_home_opened(client, event, say):
             redirect_uri = os.environ["NOTION_REDIRECT_URI"]
             say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
                 f"1. Integrate with <https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user_id}-{team_id}-{channel_id}|Notion>\n\n"
-                "2. Check which docs have been loaded with `/hashy docs`\n\n"
-                "3. DM Hashy with your query or mention `@Hashy` with your query to search through your documents\n\n"
+                "2. DM Hashy with your query or mention `@Hashy` with your query to search through your documents\n\n"
                 "Type in `/hashy help` for the list of different commands\n\n"
             )
     except:
@@ -583,7 +530,7 @@ async def notion_oauth_redirect(code, state):
     client = WebClient(token=bot.bot_token)
     client.chat_postMessage(
         channel=channel_id,
-        text=f"Processing your Notion documents. Check which ones are finished with the `/hashy docs` command"
+        text=f"Integrated with your Notion account! Start searching your documents as Hashy continues to stay in sync with your Notion account."
     )
 
     response = RedirectResponse(f"https://app.slack.com/client/{team_id}")
