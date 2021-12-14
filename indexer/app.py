@@ -19,23 +19,13 @@ from sqlalchemy.orm import sessionmaker
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-user = os.environ["POSTGRES_USER"]
+pg_user = os.environ["POSTGRES_USER"]
 password = os.environ["POSTGRES_PASSWORD"]
 host = os.environ["POSTGRES_HOST"]
 database = os.environ["POSTGRES_DB"]
 port = os.environ["POSTGRES_PORT"]
 
 REGEX_EXP = r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s"
-
-SQLALCHEMY_DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{database}"
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-installation_store = SQLAlchemyInstallationStore(
-    client_id=os.environ["SLACK_CLIENT_ID"],
-    engine=engine
-)
-
-search_model = SentenceTransformer(os.environ["DATA_DIR"])
 
 
 @as_declarative()
@@ -77,26 +67,18 @@ class NotionToken(Base):
     workspace_id = Column(String, nullable=False)
 
 
-def _get_txt_document_text(url, team):
-    bot = installation_store.find_bot(
-        enterprise_id=None,
-        team_id=team,
-    )
+def _get_txt_document_text(token, url):
     headers = {
-        "Authorization": f"Bearer {bot.bot_token}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "text/html"
     }
     text = requests.get(url, headers=headers).text
     return text
 
 
-def _get_pdf_document_text(url, team):
-    bot = installation_store.find_bot(
-        enterprise_id=None,
-        team_id=team,
-    )
+def _get_pdf_document_text(token, url):
     headers = {
-        "Authorization": f"Bearer {bot.bot_token}",
+        "Authorization": f"Bearer {token}",
     }
     byte_str = requests.get(url, headers=headers).content
     pdf_memory_file = io.BytesIO()
@@ -117,10 +99,8 @@ NOTION_REQUEST_BODY = {
 }
 
 
-def _get_notion_document_text(file_id, user):
-    db = SessionLocal()
+def _get_notion_document_text(file_id, token):
     try:
-        token = db.query(NotionToken).filter(NotionToken.user_id == user).first().access_token
         api_url = f"https://api.notion.com/v1/blocks/{file_id}/children"
         headers = {
             "Authorization": f"Bearer {token}",
@@ -157,14 +137,22 @@ def _get_notion_document_text(file_id, user):
         todos_text = ". ".join(todos)
         text.append(todos_text)
         processed_text = " ".join(" ".join(text).encode("ascii", "ignore").decode().strip().split())
-    except:
-        raise
-    finally:
-        db.close()
+    except Exception as e:
+        logger.info(e)
+        return None
     return processed_text
 
 
 def handler(event, context):
+    SQLALCHEMY_DATABASE_URL = f"postgresql://{pg_user}:{password}@{host}:{port}/{database}"
+    engine = create_engine(SQLALCHEMY_DATABASE_URL)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    installation_store = SQLAlchemyInstallationStore(
+        client_id=os.environ["SLACK_CLIENT_ID"],
+        engine=engine
+    )
+    search_model = SentenceTransformer(os.environ["DATA_DIR"])
+    logger.info(f"Processing {len(event['Records'])}")
     for record in event['Records']:
         if isinstance(record["body"], str):
             payload = json.loads(record["body"])
@@ -181,14 +169,26 @@ def handler(event, context):
         mimetype = payload.get("mimetype")
         converted_pdf = payload.get("converted_pdf", None)
         text = None
+        bot = installation_store.find_bot(
+            enterprise_id=None,
+            team_id=team,
+        )
+        token = bot.bot_token
+        db = SessionLocal()
+        try:
+            token = db.query(NotionToken).filter(NotionToken.user_id == user).first().access_token
+        except:
+            raise
+        finally:
+            db.close()
         if mimetype == "text/plain":
-            text = _get_txt_document_text(url, team)
+            text = _get_txt_document_text(token, url)
         elif mimetype == "application/pdf":
-            text = _get_pdf_document_text(url, team)
+            text = _get_pdf_document_text(token, url)
         elif filetype == "docx" and converted_pdf is not None:
-            text = _get_pdf_document_text(url, team)
+            text = _get_pdf_document_text(token, url)
         elif filetype == "notion":
-            text = _get_notion_document_text(file_id, user)
+            text = _get_notion_document_text(file_id, token)
             if not text:
                 continue
         else:
@@ -219,7 +219,7 @@ def handler(event, context):
             raise
         finally:
             db.close()
-        
+                
         if channel:
             bot = installation_store.find_bot(
                 enterprise_id=None,
@@ -230,3 +230,5 @@ def handler(event, context):
                 channel=channel,
                 text=f"Finished processing File {file_name}"
             )
+    
+    engine.dispose()

@@ -131,22 +131,24 @@ def handler(event, context):
                     "file_id": res["id"]
                 }
                 pages.append(page)
-                queue.send_message(MessageBody=json.dumps(page))
 
         doc_ids = set(doc_ids)
         returned_doc_ids = set(returned_doc_ids)
         docs_to_delete = doc_ids - returned_doc_ids
+        logger.info(f"Deleting {len(docs_to_delete)} docs")
         for doc_id in docs_to_delete:
             logger.info(f"Deleting {doc_id}")
             db.query(Document).filter(Document.file_id == doc_id).delete()
         db.commit()
-
-        for page in pages:
-            logger.info(f"Upserting {page}")
-            queue.send_message(MessageBody=json.dumps(page))
 
     except:
         raise
     finally:
         db.close()
     
+    engine.dispose()
+
+    logger.info(f"Upserting {len(pages)} docs")
+    for page in pages:
+        logger.info(f"Upserting {page}")
+        queue.send_message(MessageBody=json.dumps(page))
