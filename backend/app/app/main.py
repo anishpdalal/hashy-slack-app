@@ -90,11 +90,12 @@ def handle_message_file_share(event, say):
 
 
 @app.action("save_answer")
-def save_answer(ack, body, say):
+def save_answer(ack, body, client):
     ack()
+    view_id = body["container"]["view_id"]
     team = body["team"]["id"]
     user = body["user"]["id"]
-    text = [block["text"]["text"].split("Query: ")[1] for block in body["message"]["blocks"] if "Query:" in block.get("text", {}).get("text", "")][0]
+    text = [block["text"]["text"].split("Query: ")[1] for block in body["view"]["blocks"] if "Query:" in block.get("text", {}).get("text", "")][0]
     result = body["actions"][0]["value"]
     query = {
         "team": team,
@@ -106,55 +107,45 @@ def save_answer(ack, body, say):
         f"{os.environ['API_URL']}/create-answer",
         data=json.dumps(query)
     )
-    say("Question and Answer added to knowledge base!")
-
-
-@app.action("update_answer")
-def update_answer(ack, body, say):
-    ack()
-    team = body["team"]["id"]
-    text = body["message"]["blocks"][0]["text"]["text"].split("Query: ")[1]
-    db = database.SessionLocal()
-    try:
-        query = crud.get_query_by_text(db, team, text)
-        id = query.id
-        update_fields = {"result": body["actions"][0]["value"]}
-        crud.update_query(db, id, update_fields)
-        db.commit()
-    except:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-    say("Updated Answer!")
-
-
-@app.action("override")
-def verify_result(ack, body, say):
-    ack()
-    query = body["actions"][0]["value"]
-    say(blocks=[
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"Query: {query}"
-            }
-        },
-        {
-            "dispatch_action": True,
-            "type": "input",
-            "element": {
-                "type": "plain_text_input",
-                "action_id": "update_answer"
-            },
-            "label": {
-                "type": "plain_text",
-                "text": "Have a way to improve the answer? Save it here:",
-                "emoji": True
-            }
+    blocks = [{
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": f"Query: {text}"
         }
-    ])
+    }]
+    event = {
+        "team": team,
+        "user": user
+    }
+    result_blocks = answer_query(event, text)
+    blocks.extend(result_blocks)
+    blocks.append({
+        "dispatch_action": True,
+        "type": "input",
+        "element": {
+            "type": "plain_text_input",
+            "action_id": "save_answer"
+        },
+        "label": {
+            "type": "plain_text",
+            "text": f"Have an answer you'd like to contribute? Save it here:",
+            "emoji": True
+        }
+    })
+    client.views_update(
+        view_id=view_id,
+        view={
+            "type": "modal",
+            "title": {
+                "type": "plain_text",
+                "text": "Results",
+                "emoji": True
+            },
+            "blocks": blocks
+        }
+    )
+
 
 @app.event({
     "type": "message",
@@ -175,42 +166,7 @@ def handle_message_deleted(event, say):
         db.close()
         
 
-@app.action("view_more_results")
-def view_more_results(ack, body, client):
-    ack()
-    query = body["actions"][0]["value"]
-    team = body["team"]["id"]
-    user = body["user"]["id"]
-    results = requests.post(
-        f"{os.environ['API_URL']}/search",
-        data=json.dumps({"team": team, "query": query, "count": 3, "user": user})
-    )
-    results = json.loads(results.text)
-    blocks = []
-    for idx, result in enumerate(results):
-        if idx != 0:
-            blocks.append({"type": "divider"})
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"{result['result']}\n\n<{result['source']}|{result['name']}>"
-            }
-        })
-    client.views_open(
-        trigger_id=body["trigger_id"],
-        view={
-            "type": "modal",
-            "title": {
-                "type": "plain_text",
-                "text": "Additional Results",
-                "emoji": True
-            },
-            "blocks": blocks
-        }
-    )
-
-def answer_query(event, say, query):
+def answer_query(event, query):
     team = event["team"]
     user = event["user"]
     logger.info(json.dumps({
@@ -218,52 +174,31 @@ def answer_query(event, say, query):
         "team": team,
         "query": query
     }))
-    results = requests.post(
-        f"{os.environ['API_URL']}/answer",
-        data=json.dumps({"team": team, "query": query, "user": user})
-    )
-    results = json.loads(results.text)
-    if len(results) == 0:
-        blocks = [
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "No matching document found"
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"Query: {query}"
-                }
-            },
-            {
-                "dispatch_action": True,
-                "type": "input",
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "save_answer"
-                },
-                "label": {
-                    "type": "plain_text",
-                    "text": f"Have an answer? Save it here:",
-                    "emoji": True
-                }
-            }
-        ]
-        say(blocks=blocks)
-    else:
-        result = results[0]
+    response = requests.post(
+        f"{os.environ['API_URL']}/search",
+        data=json.dumps({"team": team, "query": query, "user": user, "count": 10})
+    ).json()
+
+    blocks = []
+    if len(response["answers"]) > 0:
+        blocks.append({
+			"type": "header",
+			"text": {
+				"type": "plain_text",
+				"text": f"Team Answers ({len(response['answers'])})",
+				"emoji": True
+			}
+		})
+    
+    for idx, result in enumerate(response["answers"]):
+        if idx != 0:
+            blocks.append({"type": "divider"})
         source = result.get("source","")
-        name = result.get("name", result.get("user", ""))
-        team = result["team"]
-        text = result["text"]
-        last_modified = result.get("last_modified", "")
+        name = result.get("name")
         result_text = result["result"]
+        last_modified = result.get("last_modified", "")
         source_text = f"<{source}|{name}>" if source else f"{name} on {last_modified}"
-        blocks = [
+        blocks.append(
             {
                 "type": "section",
                 "text": {
@@ -271,75 +206,65 @@ def answer_query(event, say, query):
                     "text": f"{result_text}",
                     "emoji": True
                 }
-            },
+            }
+        )
+        blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
                     "text": f"\n\n Source: {source_text}"
                 }
-            },
+            }
+        )
+    
+    if len(response["search_results"]) > 0:
+        blocks.append({
+			"type": "header",
+			"text": {
+				"type": "plain_text",
+				"text": f"Search Results ({len(response['search_results'])})",
+				"emoji": True
+			}
+		})
+    
+
+    for idx, result in enumerate(response["search_results"]):
+        if idx != 0:
+            blocks.append({"type": "divider"})
+        source = result.get("source","")
+        name = result.get("name")
+        result_text = result["result"]
+        last_modified = result.get("last_modified", "")
+        source_text = f"<{source}|{name}>" if source else f"{name} on {last_modified}"
+        blocks.append(
             {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "View More Results",
-                            "emoji": True
-                        },
-                        "value": query,
-                        "action_id": "view_more_results"
-                    }
-                ]
-		    }
-        ]
-        if result.get("user"):
-            blocks.append({
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "Override Answer"
-                        },
-                        "style": "danger",
-                        "value": text,
-                        "action_id": "override"
-                    }
-                ]
-            })
-        else:
-            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"{result_text}",
+                    "emoji": True
+                }
+            }
+        )
+        blocks.append(
+            {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"Query: {query}"
+                    "text": f"\n\n Source: {source_text}"
                 }
-            })
-            blocks.append({
-                "dispatch_action": True,
-                "type": "input",
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "save_answer"
-                },
-                "label": {
-                    "type": "plain_text",
-                    "text": f"Have an answer? Save it here:",
-                    "emoji": True
-                }
-            })
-        say(blocks=blocks)
+            }
+        )
+    
+    return blocks
 
 
 @app.event("app_mention")
 def handle_mentions(event, say):
     query = event["text"].split("> ")[1]
     if query is not None:
-        answer_query(event, say, query)
+        say(f"Paste in `/hashy {query}`")
 
 
 @app.event("message")
@@ -347,11 +272,11 @@ def handle_message(event, say):
     channel_type = event.get("channel_type")
     query = event.get("text")
     if query is not None and channel_type == "im":
-        answer_query(event, say, query)
+        say(f"Paste in `/hashy {query}`")
 
 
 @app.command("/hashy")
-def repeat_text(ack, respond, command, client):
+def help_command(ack, respond, command, client):
     ack()
     command_text = command.get("text")
     channel = command["channel_id"]
@@ -366,11 +291,70 @@ def repeat_text(ack, respond, command, client):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{channel}|Notion Integation>"
+                        "text": f"Integrate with <https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{channel}|Notion>. Takes up to 1 hour to process all documents."
                     }
                 },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"To search enter `/hashy <your query here>`"
+                    }
+                }
             ]
         })
+    else:
+        event = {
+            "team": team,
+            "user": user
+        }
+        blocks = [{
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Query: {command_text}"
+            }
+        }]
+        response = client.views_open(
+            trigger_id=command["trigger_id"],
+            view={
+                "type": "modal",
+                "title": {
+                    "type": "plain_text",
+                    "text": f"Results",
+                    "emoji": True
+                },
+                "blocks": blocks
+            }
+        )
+        result_blocks = answer_query(event, command_text)
+        blocks.extend(result_blocks)
+        blocks.append({
+            "dispatch_action": True,
+            "type": "input",
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "save_answer"
+            },
+            "label": {
+                "type": "plain_text",
+                "text": f"Have an answer you'd like to contribute? Save it here:",
+                "emoji": True
+            }
+        })
+        client.views_update(
+            hash=response["view"]["hash"],
+            view_id=response["view"]["id"],
+            view={
+                "type": "modal",
+                "title": {
+                    "type": "plain_text",
+                    "text": "Results",
+                    "emoji": True
+                },
+                "blocks": blocks
+            }
+        )
 
 
 @app.event("app_home_opened")
@@ -402,9 +386,9 @@ def handle_app_home_opened(client, event, say):
             notion_id = os.environ["NOTION_CLIENT_ID"]
             redirect_uri = os.environ["NOTION_REDIRECT_URI"]
             say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
-                f"1. Integrate with <https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user_id}-{team_id}-{channel_id}|Notion>\n\n"
-                "2. DM Hashy with your query or mention `@Hashy` with your query to search through your documents\n\n"
-                "Type in `/hashy help` for the list of different commands\n\n"
+                f"Integrate with <https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user_id}-{team_id}-{channel_id}|Notion>. Takes up to 1 hour to process all documents.\n\n"
+                "To search enter `/hashy <your query here>`\n\n"
+                "Type in `/hashy help` to pull up these instructions again\n\n"
             )
     except:
         db.rollback()

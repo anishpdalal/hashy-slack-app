@@ -40,6 +40,8 @@ REGEX_EXP = r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s"
 search_model = SentenceTransformer(os.environ["DATA_DIR"])
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+DOCS = {}
+
 @as_declarative()
 class Base:
     id: Any
@@ -98,19 +100,39 @@ def _get_queries(db, team):
     return queries
 
 
-def _get_most_similar_query(queries, embedding):
+def _get_most_similar_query(db, team, embedding):
+    bot = installation_store.find_bot(
+        enterprise_id=None,
+        team_id=team,
+    )
+    queries = _get_queries(db, team)
     if len(queries) == 0:
-        return
+        return []
     scores = [
         util.semantic_search(embedding, pickle.loads(obj.embedding), top_k=1)[0][0] for obj in queries
     ]
-    max_idx = max(range(len(scores)), key=lambda x: scores[x]["score"])
-    obj = queries[max_idx]
-    score = scores[max_idx]["score"]
-    if score >= 0.4:
-        return obj
-    else:
-        return
+    results = []
+    sorted_idx = sorted(range(len(scores)), key=lambda x: scores[x]["score"], reverse=True)
+    for idx in sorted_idx:
+        score = scores[idx]["score"]
+        if score >= 0.4:
+            obj = queries[idx]
+            user = obj.user
+            client = WebClient(token=bot.bot_token)
+            result = client.users_info(
+                user=user
+            )
+            user_name = result['user']['name']
+            last_modified = obj.time_updated if obj.time_updated else obj.time_created
+            results.append({
+                "name": user_name,
+                "team": team,
+                "text": obj.text,
+                "source": obj.evidence,
+                "last_modified": f"{last_modified.month}/{last_modified.day}/{last_modified.year}",
+                "result": obj.result
+            })
+    return results
 
 
 def _get_documents(db, team):
@@ -148,6 +170,8 @@ def _get_pdf_document_text(url, team):
 
 def _get_notion_document_text(file_id, user):
     db = SessionLocal()
+    if file_id in DOCS:
+        return DOCS[file_id]
     try:
         token = db.query(NotionToken).filter(NotionToken.user_id == user).first().access_token
         api_url = f"https://api.notion.com/v1/blocks/{file_id}/children"
@@ -186,6 +210,7 @@ def _get_notion_document_text(file_id, user):
         todos_text = ". ".join(todos)
         text.append(todos_text)
         processed_text = " ".join(" ".join(text).encode("ascii", "ignore").decode().strip().split())
+        DOCS[file_id] = processed_text
     except:
         raise
     finally:
@@ -254,87 +279,18 @@ def handler(event, context):
                 "Content-Type": "application/json"
             }
         }
-    elif path == "/answer":
-        team = body["team"]
-        user = body["user"]
-        query = body["query"]
-        db = SessionLocal()
-        try:
-            queries = _get_queries(db, team)
-            query_embedding = search_model.encode([query])
-            msq = _get_most_similar_query(queries, query_embedding)
-        except:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-        if msq:
-            user = msq.user
-            bot = installation_store.find_bot(
-                enterprise_id=None,
-                team_id=team,
-            )
-            client = WebClient(token=bot.bot_token)
-            result = client.users_info(
-                user=user
-            )
-            user_name = result['user']['name']
-            last_modified = msq.time_updated if msq.time_updated else msq.time_created
-            results = [{
-                "user": user_name,
-                "team": team,
-                "text": msq.text,
-                "source": msq.evidence,
-                "last_modified": f"{last_modified.month}/{last_modified.day}/{last_modified.year}",
-                "result": msq.result
-            }]
-        else:
-            db = SessionLocal()
-            try:
-                docs = _get_documents(db, team)
-                results = _get_k_most_similar_docs(docs, query_embedding, user)
-            except:
-                db.rollback()
-                raise
-            finally:
-                db.close()
-            if len(results) == 1:
-                snippet_processed = results[0]["result"]
-                response = openai.Completion.create(
-                    engine="curie",
-                    prompt=f"Original: The Company and the Founders will provide the Investors with customary representations and warranties examples of which are set out in Appendix 4 and the Founders will provide the Investors with customary non-competition, non-solicitation and confidentiality undertakings.\nSummary: The Company and its Founders will provide the usual assurances and guarantees on facts about the business. The founders will also agree not to work for competitors, poach employees or customers when they leave the startup, and respect confidentiality.\n###\nOriginal: One immediately obvious and enormous area for Bitcoin-based innovation is international remittance. Every day, hundreds of millions of low-income people go to work in hard jobs in foreign countries to make money to send back to their families in their home countries – over $400 billion in total annually, according to the World Bank.\nSummary: Bitcoin can be an innovation for sending money overseas. The market opportunity is large. Workers send over $400 billion annually to their families in their home countries. \n###\nOriginal: In the event of an initial public offering of the Company's shares on a US stock exchange the Investors shall be entitled to registration rights customary in transactions of this type (including two demand rights and unlimited shelf and piggy-back rights), with the expenses paid by the Company.\nSummary: If the Company does an IPO in the USA, investors have the usual rights to include their shares in the public offering and the costs of d doing this will be covered by the Company.\n###\nOriginal: Finally, a fourth interesting use case is public payments. This idea first came to my attention in a news article a few months ago. A random spectator at a televised sports event held up a placard with a QR code and the text “Send me Bitcoin!” He received $25,000 in Bitcoin in the first 24 hours, all from people he had never met. This was the first time in history that you could see someone holding up a sign, in person or on TV or in a photo, and then send them money with two clicks on your smartphone: take the photo of the QR code on the sign, and click to send the money.\nSummary: Public payments is an interesting use case for Bitcoin. A person collected $25,000 in Bitcoin from strangers after holding up a QR code. It was the first time in history such an event occured.\n###\nOriginal: {snippet_processed}\n",
-                    temperature=0,
-                    max_tokens=32,
-                    top_p=1,
-                    frequency_penalty=1,
-                    presence_penalty=0,
-                    stop=["\n"]
-                )
-                try:
-                    answer = response["choices"][0]["text"].split("Summary: ")[1]
-                    answer = ".".join(answer.split(".")[:-1])
-                    results[0]["result"] = answer
-                except:
-                    results[0]["result"] = snippet_processed
-        return {
-            "statusCode": 200,
-            "body": json.dumps(results),
-            "headers": {
-                "Access-Control-Allow-Origin": "*",
-                "Content-Type": "application/json"
-            }
-        }
-    
     elif path == "/search":
         team = body["team"]
         user = body["user"]
+        query = body["query"]
+        results = {}
         db = SessionLocal()
         try:
+            query_embedding = search_model.encode([query])
+            results["answers"] = _get_most_similar_query(db, team, query_embedding)
             docs = _get_documents(db, team)
             k = body.get("count", 1)
-            query = body["query"]
-            query_embedding = search_model.encode([query])
-            results = _get_k_most_similar_docs(docs, query_embedding, user, k=k)
+            results["search_results"] = _get_k_most_similar_docs(docs, query_embedding, user, k=k)
         except:
             db.rollback()
             raise
