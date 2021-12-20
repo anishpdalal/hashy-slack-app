@@ -1,5 +1,6 @@
 awslambdaric
 boto3
+cryptography
 openai
 pdfminer.six
 protobuf
@@ -7,4 +8,5 @@ psycopg2-binary
 sentence-transformers
 slack-bolt
 SQLAlchemy
+sqlalchemy-utils
 torch

@@ -11,6 +11,8 @@ from sqlalchemy import create_engine, Column, Integer, PickleType, String, Text,
 from sqlalchemy.sql import func
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
 from sqlalchemy.orm import load_only, sessionmaker
+from sqlalchemy_utils import EncryptedType
+from sqlalchemy_utils.types.encrypted.encrypted_type import AesEngine
 
 
 @as_declarative()
@@ -29,7 +31,7 @@ class NotionToken(Base):
     user_id = Column(String, nullable=False)
     team = Column(String, nullable=False)
     notion_user_id = Column(String, nullable=False)
-    access_token = Column(String, nullable=False)
+    encrypted_token = Column(EncryptedType(String, os.environ["TOKEN_SEC_KEY"], AesEngine, "pkcs5"))
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -95,7 +97,7 @@ def handler(event, context):
                 }
             }
             headers = {
-                "Authorization": f"Bearer {token.access_token}",
+                "Authorization": f"Bearer {token.encrypted_token}",
                 "Content-type": "application/json",
                 "Notion-Version": "2021-08-16"
             }

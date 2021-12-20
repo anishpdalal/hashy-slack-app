@@ -17,6 +17,8 @@ from sqlalchemy import create_engine, Column, Integer, PickleType, String, Text,
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
+from sqlalchemy_utils import EncryptedType
+from sqlalchemy_utils.types.encrypted.encrypted_type import AesEngine
 
 
 logger = logging.getLogger()
@@ -87,7 +89,7 @@ class NotionToken(Base):
     user_id = Column(String, nullable=False)
     team = Column(String, nullable=False)
     notion_user_id = Column(String, nullable=False)
-    access_token = Column(String, nullable=False)
+    encrypted_token = Column(EncryptedType(String, os.environ["TOKEN_SEC_KEY"], AesEngine, "pkcs5"))
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -173,7 +175,7 @@ def _get_notion_document_text(file_id, user):
     if file_id in DOCS:
         return DOCS[file_id]
     try:
-        token = db.query(NotionToken).filter(NotionToken.user_id == user).first().access_token
+        token = db.query(NotionToken).filter(NotionToken.user_id == user).first().encrypted_token
         api_url = f"https://api.notion.com/v1/blocks/{file_id}/children"
         headers = {
             "Authorization": f"Bearer {token}",

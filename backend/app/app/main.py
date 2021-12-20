@@ -446,7 +446,7 @@ async def notion_oauth_redirect(code, state):
             "user_id": user_id,
             "team": team_id,
             "notion_user_id": notion_user_id,
-            "access_token": access_token,
+            "encrypted_token": access_token,
             "bot_id": bot_id,
             "workspace_id": workspace_id
         }
