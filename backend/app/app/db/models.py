@@ -1,5 +1,10 @@
+import os
+
 from sqlalchemy import Column, Integer, PickleType, String, Text, DateTime
 from sqlalchemy.sql import func
+from sqlalchemy_utils import EncryptedType
+from sqlalchemy_utils.types.encrypted.encrypted_type import AesEngine
+
 
 from .base_class import Base
 
@@ -49,7 +54,7 @@ class NotionToken(Base):
     user_id = Column(String, nullable=False)
     team = Column(String, nullable=False)
     notion_user_id = Column(String, nullable=False)
-    access_token = Column(String, nullable=False)
+    encrypted_token = Column(EncryptedType(String, os.environ["TOKEN_SEC_KEY"], AesEngine, "pkcs5"))
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
