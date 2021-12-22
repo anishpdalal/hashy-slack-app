@@ -268,6 +268,20 @@ def _get_k_most_similar_docs(docs, embedding, user, k=1):
             })
     return results
 
+def _get_summary(text):
+    response = openai.Completion.create(
+        engine="curie-instruct-beta-v2",
+        prompt=f"{text}\n\ntl;dr:",
+        temperature=0,
+        max_tokens=32,
+        top_p=1,
+        frequency_penalty=0,
+        presence_penalty=0
+    )
+    summary_text = response.choices[0]["text"].strip()
+    summary_text= ".".join(summary_text.split(".")[:-1])
+    return summary_text
+
 
 def handler(event, context):
     path = event["path"]
@@ -293,6 +307,7 @@ def handler(event, context):
             docs = _get_documents(db, team)
             k = body.get("count", 1)
             results["search_results"] = _get_k_most_similar_docs(docs, query_embedding, user, k=k)
+            results["summary"] = _get_summary(results["search_results"][0]["result"])
         except:
             db.rollback()
             raise
