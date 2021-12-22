@@ -180,6 +180,28 @@ def answer_query(event, query):
     ).json()
 
     blocks = []
+
+    if len(response["summary"]):
+        blocks.append({
+			"type": "header",
+			"text": {
+				"type": "plain_text",
+				"text": f"Summary",
+				"emoji": True
+			}
+		})
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "plain_text",
+                    "text": response["summary"],
+                    "emoji": True
+                }
+            }
+        )
+        blocks.append({"type": "divider"})
+
     if len(response["answers"]) > 0:
         blocks.append({
 			"type": "header",
