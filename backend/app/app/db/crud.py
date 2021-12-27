@@ -88,3 +88,13 @@ def get_notion_token(db: Session, user_id: str):
 
 def update_notion_token(db:Session, id: int, fields: Dict[str, Any]):
     db.query(models.NotionToken).filter_by(id=id).update(fields)
+
+
+def get_google_token(db: Session, user_id: str):
+    token = db.query(models.GoogleToken).filter(models.GoogleToken.user_id == user_id).first()
+    return token
+
+
+def create_google_token(fields: Dict[str, Any]):
+    token = models.GoogleToken(**fields)
+    return token

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -29,7 +29,6 @@ class Query(QueryBase):
 class DocumentBase(BaseModel):
     team: str
     name: str
-    word_positions: Optional[str]
     embeddings: bytes
     url: str
     user: str
@@ -80,3 +79,10 @@ class NotionTokenCreate(NotionTokenBase):
 
 class NotionToken(NotionTokenBase):
     time_created: datetime
+
+
+class GooglePickerUpload(BaseModel):
+    file_ids: List[str]
+    team: str
+    user: str
+    token: str

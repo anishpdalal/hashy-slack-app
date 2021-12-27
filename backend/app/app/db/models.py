@@ -29,7 +29,7 @@ class Document(Base):
     user = Column(String, nullable=False)
     file_id = Column(String, nullable=False)
     name = Column(String, nullable=False)
-    word_positions = Column(Text)
+    type = Column(String)
     url = Column(String, nullable=False)
     embeddings = Column(PickleType, nullable=False)
     time_created = Column(
@@ -60,3 +60,14 @@ class NotionToken(Base):
     )
     bot_id = Column(String, nullable=False)
     workspace_id = Column(String, nullable=False)
+
+
+class GoogleToken(Base):
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False)
+    team = Column(String, nullable=False)
+    encrypted_token = Column(EncryptedType(String, os.environ["TOKEN_SEC_KEY"], AesEngine, "pkcs5"))
+    time_created = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+ 
