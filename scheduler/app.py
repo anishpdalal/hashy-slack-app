@@ -45,8 +45,8 @@ class Document(Base):
     user = Column(String, nullable=False)
     file_id = Column(String, nullable=False)
     name = Column(String, nullable=False)
-    word_positions = Column(Text)
     url = Column(String, nullable=False)
+    type = Column(String)
     embeddings = Column(PickleType, nullable=False)
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

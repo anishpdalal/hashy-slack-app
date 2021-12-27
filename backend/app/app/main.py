@@ -1,11 +1,17 @@
 import base64
+import io
 import json
 import logging
 import os
 
 import boto3
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
+from google.auth.transport.requests import Request as GRequest
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 import requests
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
@@ -16,7 +22,6 @@ from slack_sdk.web import WebClient
 from app.db import crud, database, schemas
 
 logging.basicConfig(level=logging.INFO)
-logging.getLogger("pdfminer").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -296,9 +301,10 @@ def handle_message(event, say):
     if query is not None and channel_type == "im":
         say(f"Paste in `/hashy {query}`")
 
+SCOPE = 'https://www.googleapis.com/auth/drive.file'
 
 @app.command("/hashy")
-def help_command(ack, respond, command, client):
+def help_command(ack, respond, command, client, request):
     ack()
     command_text = command.get("text")
     channel = command["channel_id"]
@@ -306,6 +312,8 @@ def help_command(ack, respond, command, client):
     team = command["team_id"]
     notion_id = os.environ["NOTION_CLIENT_ID"]
     redirect_uri = os.environ["NOTION_REDIRECT_URI"]
+    google_redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
+    google_client_id = os.environ["GOOGLE_CLIENT_ID"]
     if command_text == "help":
         respond({
             "blocks": [
@@ -314,6 +322,13 @@ def help_command(ack, respond, command, client):
                     "text": {
                         "type": "mrkdwn",
                         "text": f"Integrate with <https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{channel}|Notion>. Takes up to 1 hour to process all documents."
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"Integrate with <https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}-{channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Google Drive>."
                     }
                 },
                 {
@@ -434,6 +449,148 @@ async def install(req: Request):
 @api.get("/slack/oauth_redirect")
 async def oauth_redirect(req: Request):
     return await app_handler.handle(req)
+
+
+@api.get("/google/oauth_redirect")
+async def google_authorize(req: Request, state):
+    user_id, team_id, _ = state.split("-")
+    config = {
+        "web":{
+            "client_id": os.environ["GOOGLE_CLIENT_ID"],
+            "project_id": os.environ["GOOGLE_PROJECT_ID"],
+            "auth_uri":" https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_secret": os.environ["GOOGLE_SECRET_KEY"],
+            "redirect_uris": [os.environ["GOOGLE_REDIRECT_URI"]],
+            "javascript_origins": [req.url.components.netloc]
+        }
+    }
+    flow = Flow.from_client_config(
+      config, scopes='https://www.googleapis.com/auth/drive.file', state=state
+    )
+    flow.redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
+    auth_response = req.url.components
+    auth_response = f"https://{auth_response.netloc}{auth_response.path}?{auth_response.query}"
+    flow.fetch_token(authorization_response=auth_response)
+    credentials = flow.credentials
+    db = database.SessionLocal()
+    try:
+        fields = {
+            "user_id": user_id,
+            "team": team_id,
+            "encrypted_token": credentials.refresh_token,
+        }
+        token = crud.get_google_token(db, user_id)
+        if not token:
+            token = crud.create_google_token(fields)
+            db.add(token)
+            db.commit()
+            db.refresh(token)
+    except:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+    response = RedirectResponse(f"/google-picker/{credentials.token}?team={team_id}&user={user_id}")
+    return response
+
+
+@api.get("/google-picker/{token}")
+async def google_picker(token, team, user):
+    html = """
+    <html xmlns="http://www.w3.org/1999/xhtml">
+        <head>
+            <meta charset="utf-8" />
+            <title>Google Picker Example</title>
+
+            <script type="text/javascript">
+
+            var pickerApiLoaded = false;
+            var oauthToken = window.location.pathname.split("/")[2];
+            var developerKey = 'AIzaSyBRtH-6xtd7wcMBtwaG3JN1XX6tMRkS5Mw';
+            var urlParams = new URLSearchParams(window.location.search);
+            var team = urlParams.get("team");
+            var user = urlParams.get("user");
+            var appId = "192493136270";
+
+            function loadPicker() {
+                gapi.load('picker', {'callback': onPickerApiLoad});
+            }
+
+
+            function onPickerApiLoad() {
+                pickerApiLoaded = true;
+                createPicker();
+            }
+
+            function createPicker() {
+                if (pickerApiLoaded && oauthToken) {
+                    var DisplayView = new google.picker.DocsView().setIncludeFolders(true);
+                    var picker = new google.picker.PickerBuilder().
+                        enableFeature(google.picker.Feature.MULTISELECT_ENABLED).
+                        addView(DisplayView).
+                        setAppId(appId).
+                        setOAuthToken(oauthToken).
+                        setDeveloperKey(developerKey).
+                        setCallback(pickerCallback).
+                        build().
+                        setVisible(true);
+                }
+            }
+
+            function pickerCallback(data) {
+                if (data.action == google.picker.Action.PICKED) {
+                    var fileIds = [];
+                    for (let i = 0; i < data.docs.length; i++) {
+                        fileIds.push(data.docs[i].id);
+                    }
+                    var xmlhttp = new XMLHttpRequest();
+                    var theUrl = `https://${window.location.hostname}/google/process-documents`;
+                    xmlhttp.open("POST", theUrl);
+                    xmlhttp.setRequestHeader("Content-Type", "application/json");
+                    xmlhttp.send(JSON.stringify({"team": team, "user": user, "token": oauthToken, file_ids: fileIds}));
+                    window.location.assign(`https://app.slack.com/client/${team}`);
+                }
+            }
+            </script>
+        </head>
+        <body>
+            <div id="result"></div>
+            <!-- The Google API Loader script. -->
+            <script type="text/javascript" src="https://apis.google.com/js/api.js?onload=loadPicker"></script>
+        </body>
+    </html>
+    """
+    return HTMLResponse(html)
+
+
+@api.post("/google/process-documents")
+def process_google_documents(upload: schemas.GooglePickerUpload):
+    user_id = upload.user
+    team_id = upload.team
+    db = database.SessionLocal()
+    token = crud.get_google_token(db, user_id)
+    db.close()
+    creds = Credentials.from_authorized_user_info({
+        "refresh_token": token.encrypted_token,
+        "client_id": os.environ["GOOGLE_CLIENT_ID"],
+        "client_secret": os.environ["GOOGLE_SECRET_KEY"],
+        "scopes": ["https://www.googleapis.com/auth/drive.file"]
+    })
+    creds.refresh(GRequest())
+    service = build('drive', 'v3', credentials=creds)
+    for file_id in upload.file_ids:
+        file_info = service.files().get(fileId=file_id).execute()
+        page = {
+            "team": team_id,
+            "user": user_id,
+            "url": f"https://drive.google.com/file/d/{file_info['id']}",
+            "filetype": f"drive#file|{file_info['mimeType']}",
+            "file_name": file_info["name"],
+            "file_id": file_info["id"]
+        }
+        queue.send_message(MessageBody=json.dumps(page))
 
 
 @api.get("/notion/oauth_redirect")
