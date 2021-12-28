@@ -351,7 +351,7 @@ def _get_k_most_similar_docs(docs, embedding, user, k=1):
                 text = DOCS[file_id]
             else:
                 try:
-                    if "notion.so" in doc.url:
+                    if filetype == "notion":
                         text = _get_notion_document_text(file_id, user)
                     elif filetype == "drive#file|application/pdf":
                         db = SessionLocal()

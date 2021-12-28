@@ -321,7 +321,7 @@ def help_command(ack, respond, command, client, request):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"Integrate with <https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{channel}|Notion>. Takes up to 1 hour to process all documents."
+                        "text": f"Integrate with <https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{channel}|Notion>"
                     }
                 },
                 {
@@ -526,7 +526,7 @@ async def google_picker(token, team, user):
 
             function createPicker() {
                 if (pickerApiLoaded && oauthToken) {
-                    var DisplayView = new google.picker.DocsView().setIncludeFolders(true);
+                    var DisplayView = new google.picker.DocsView().setMimeTypes("application/vnd.google-apps.document,application/pdf,text/plain").setIncludeFolders(true);
                     var picker = new google.picker.PickerBuilder().
                         enableFeature(google.picker.Feature.MULTISELECT_ENABLED).
                         addView(DisplayView).
