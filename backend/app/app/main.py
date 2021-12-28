@@ -492,12 +492,14 @@ async def google_authorize(req: Request, state):
         raise
     finally:
         db.close()
-    response = RedirectResponse(f"/google-picker/{credentials.token}?team={team_id}&user={user_id}")
+    app_id = os.environ["GOOGLE_APP_ID"]
+    key = os.environ["GOOGLE_API_KEY"]
+    response = RedirectResponse(f"/google-picker/{credentials.token}?team={team_id}&user={user_id}&id={app_id}&key={key}")
     return response
 
 
 @api.get("/google-picker/{token}")
-async def google_picker(token, team, user):
+async def google_picker(token, team, user, id, key):
     html = """
     <html xmlns="http://www.w3.org/1999/xhtml">
         <head>
@@ -508,11 +510,11 @@ async def google_picker(token, team, user):
 
             var pickerApiLoaded = false;
             var oauthToken = window.location.pathname.split("/")[2];
-            var developerKey = 'AIzaSyBRtH-6xtd7wcMBtwaG3JN1XX6tMRkS5Mw';
             var urlParams = new URLSearchParams(window.location.search);
+            var developerKey = urlParams.get("key");
             var team = urlParams.get("team");
             var user = urlParams.get("user");
-            var appId = "192493136270";
+            var appId = urlParams.get("id");
 
             function loadPicker() {
                 gapi.load('picker', {'callback': onPickerApiLoad});
