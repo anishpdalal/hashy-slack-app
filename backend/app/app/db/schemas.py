@@ -68,7 +68,7 @@ class NotionTokenBase(BaseModel):
     user_id: str
     team: str
     notion_user_id: str
-    access_token: str
+    encrypted_token: str
     bot_id: str
     workspace_id: str
 
