@@ -303,6 +303,13 @@ def handle_message(event, say):
 
 SCOPE = 'https://www.googleapis.com/auth/drive.file'
 
+
+@app.action("static_select-action")
+def select_action(ack, body, client):
+    ack()
+    logger.info(body)
+
+
 @app.command("/hashy")
 def help_command(ack, respond, command, client, request):
     ack()
@@ -340,6 +347,35 @@ def help_command(ack, respond, command, client, request):
                 }
             ]
         })
+    elif command_text == "integrate":
+        blocks = []
+        response = client.views_open(
+            trigger_id=command["trigger_id"],
+            view={
+                "type": "modal",
+                "title": {
+                    "type": "plain_text",
+                    "text": f"Integration",
+                    "emoji": True
+                },
+                "blocks": blocks,
+                "title": {
+                    "type": "plain_text",
+                    "text": "My App",
+                    "emoji": True
+                },
+                "submit": {
+                    "type": "plain_text",
+                    "text": "Submit",
+                    "emoji": True
+                },
+                "close": {
+                    "type": "plain_text",
+                    "text": "Cancel",
+                    "emoji": True
+                }
+            }
+        )
     else:
         event = {
             "team": team,
