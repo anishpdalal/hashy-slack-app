@@ -86,3 +86,4 @@ class GooglePickerUpload(BaseModel):
     team: str
     user: str
     token: str
+    channel: str
