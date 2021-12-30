@@ -424,7 +424,7 @@ def help_command(ack, respond, command, client):
                 },
                 "label": {
                     "type": "plain_text",
-                    "text": "Select a channel to share documents with",
+                    "text": "Select a channel to share documents with (Make sure Hashy is invited to the channel first)",
                     "emoji": True
                 }
             }
@@ -567,7 +567,7 @@ def handle_app_home_opened(client, event, say):
             db.commit()
             db.refresh(user)
             say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
-                f"1. Identify a channel you want to share your documents with\n\n"
+                f"1. Identify a channel you want to share your documents with and add hashy to it\n\n"
                 f"2. Setup an integration with the command `/hashy integrate`\n\n"
                 f"3. Search with the command `/hashy <your query here>`\n\n"
                 "Type in `/hashy help` to view these commands\n\n"
@@ -637,6 +637,8 @@ async def google_authorize(req: Request, state):
             fields = {
                 "channel_id": channel_id
             }
+            if credentials.refresh_token is not None:
+                fields["encrypted_token"] = credentials.refresh_token
             crud.update_google_token(db, token.id, fields)
             db.commit()
     except:
