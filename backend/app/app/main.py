@@ -100,6 +100,7 @@ def save_answer(ack, body, client):
     view_id = body["container"]["view_id"]
     team = body["team"]["id"]
     user = body["user"]["id"]
+    channel = body["view"]["blocks"][-1]["text"]["text"].split("Channel ID: ")[1]
     text = [block["text"]["text"].split("Query: ")[1] for block in body["view"]["blocks"] if "Query:" in block.get("text", {}).get("text", "")][0]
     result = body["actions"][0]["value"]
     query = {
@@ -121,23 +122,34 @@ def save_answer(ack, body, client):
     }]
     event = {
         "team": team,
-        "user": user
+        "user": user,
+        "channel": channel
     }
     result_blocks = answer_query(event, text)
     blocks.extend(result_blocks)
-    blocks.append({
-        "dispatch_action": True,
-        "type": "input",
-        "element": {
-            "type": "plain_text_input",
-            "action_id": "save_answer"
+    blocks.extend([
+        {
+            "dispatch_action": True,
+            "type": "input",
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "save_answer"
+            },
+            "label": {
+                "type": "plain_text",
+                "text": f"Have an answer you'd like to contribute? Save it here:",
+                "emoji": True
+            }
         },
-        "label": {
-            "type": "plain_text",
-            "text": f"Have an answer you'd like to contribute? Save it here:",
-            "emoji": True
+        {
+            "type": "section",
+            "text": {
+                "type": "plain_text",
+                "text": f"Channel ID: {channel}",
+                "emoji": True
+            }
         }
-    })
+    ])
     client.views_update(
         view_id=view_id,
         view={
@@ -174,19 +186,21 @@ def handle_message_deleted(event, say):
 def answer_query(event, query):
     team = event["team"]
     user = event["user"]
+    channel = event["channel"]
     logger.info(json.dumps({
         "user": user,
         "team": team,
-        "query": query
+        "query": query,
+        "channel": channel
     }))
     response = requests.post(
         f"{os.environ['API_URL']}/search",
-        data=json.dumps({"team": team, "query": query, "user": user, "count": 10})
+        data=json.dumps({"team": team, "query": query, "user": user, "channel": channel, "count": 10})
     ).json()
 
     blocks = []
 
-    if len(response["summary"]):
+    if response.get("summary"):
         blocks.append({
 			"type": "header",
 			"text": {
@@ -303,17 +317,34 @@ def handle_message(event, say):
 
 SCOPE = 'https://www.googleapis.com/auth/drive.file'
 
+
+
+@app.view("integration_view")
+def handle_view_events(ack, body, client, view):
+    integration = view["state"]["values"]["target_integration"]["target_integration_select"]["selected_option"]["value"]
+    target_channel = view["state"]["values"]["target_channel"]["target_channel_select"]["selected_conversation"]
+    integration, channel = integration.split("-")
+    user = body["user"]["id"]
+    team = body["team"]["id"]
+    if integration.startswith("notion"):
+        notion_id = os.environ["NOTION_CLIENT_ID"]
+        redirect_uri = os.environ["NOTION_REDIRECT_URI"]
+        msg = f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{target_channel}|Click Here to integrate with Notion>"
+    else:
+        google_redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
+        google_client_id = os.environ["GOOGLE_CLIENT_ID"]
+        msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}-{target_channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
+    ack()
+    client.chat_postMessage(channel=channel, text=msg)
+
+
 @app.command("/hashy")
-def help_command(ack, respond, command, client, request):
+def help_command(ack, respond, command, client):
     ack()
     command_text = command.get("text")
     channel = command["channel_id"]
     user = command["user_id"]
     team = command["team_id"]
-    notion_id = os.environ["NOTION_CLIENT_ID"]
-    redirect_uri = os.environ["NOTION_REDIRECT_URI"]
-    google_redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
-    google_client_id = os.environ["GOOGLE_CLIENT_ID"]
     if command_text == "help":
         respond({
             "blocks": [
@@ -321,37 +352,134 @@ def help_command(ack, respond, command, client, request):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"Integrate with <https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{channel}|Notion>"
+                        "text": f"To create or modify an integration, enter `/hashy integrate`"
                     }
                 },
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"Integrate with <https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}-{channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Google Drive>."
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"To search enter `/hashy <your query here>`"
+                        "text": f"To search, enter `/hashy <your query here>`"
                     }
                 }
             ]
         })
+    elif command_text == "integrate":
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "An integration can only be linked to one channel at a time. *Only share documents with your integration whose information you want viewed by members of the channel.*"
+                }
+		    },
+            {
+                "block_id": "target_integration",
+                "type": "input",
+                "element": {
+                    "type": "static_select",
+                    "placeholder": {
+                        "type": "plain_text",
+                        "text": "Select an integration",
+                        "emoji": True
+                    },
+                    "action_id": "target_integration_select",
+                    "options": [
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": "Notion",
+                                "emoji": True
+                            },
+                            "value": f"notion-{channel}"
+                        },
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": "Google Drive",
+                                "emoji": True
+                            },
+                            "value": f"gdrive-{channel}"
+                        }
+                    ]
+                },
+                "label": {
+                    "type": "plain_text",
+                    "text": "Choose document source",
+                    "emoji": True
+                }
+		    },
+            {
+                "block_id": "target_channel",
+                "dispatch_action": False,
+                "type": "input",
+                "element": {
+                    "type": "conversations_select",
+                    "placeholder": {
+                        "type": "plain_text",
+                        "text": "Select a channel",
+                        "emoji": True
+                    },
+                    "action_id": "target_channel_select"
+                },
+                "label": {
+                    "type": "plain_text",
+                    "text": "Select a channel to share documents with",
+                    "emoji": True
+                }
+            }
+	    ]
+        response = client.views_open(
+            trigger_id=command["trigger_id"],
+            view={
+                "callback_id": "integration_view",
+                "type": "modal",
+                "title": {
+                    "type": "plain_text",
+                    "text": f"Integration",
+                    "emoji": True
+                },
+                "blocks": blocks,
+                "title": {
+                    "type": "plain_text",
+                    "text": "Integrations",
+                    "emoji": True
+                },
+                "submit": {
+                    "type": "plain_text",
+                    "text": "Submit",
+                    "emoji": True
+                },
+                "close": {
+                    "type": "plain_text",
+                    "text": "Cancel",
+                    "emoji": True
+                }
+            }
+        )
     else:
         event = {
             "team": team,
-            "user": user
+            "user": user,
+            "channel": channel
         }
-        blocks = [{
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"Query: {command_text}"
-            }
-        }]
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"Query: {command_text}"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"Loading Results..."
+                }
+            },
+
+        ]
         response = client.views_open(
             trigger_id=command["trigger_id"],
             view={
@@ -364,21 +492,40 @@ def help_command(ack, respond, command, client, request):
                 "blocks": blocks
             }
         )
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"Query: {command_text}"
+                }
+            }
+        ]
         result_blocks = answer_query(event, command_text)
         blocks.extend(result_blocks)
-        blocks.append({
-            "dispatch_action": True,
-            "type": "input",
-            "element": {
-                "type": "plain_text_input",
-                "action_id": "save_answer"
+        blocks.extend([
+            {
+                "dispatch_action": True,
+                "type": "input",
+                "element": {
+                    "type": "plain_text_input",
+                    "action_id": "save_answer"
+                },
+                "label": {
+                    "type": "plain_text",
+                    "text": f"Have an answer you'd like to contribute? Save it here:",
+                    "emoji": True
+                }
             },
-            "label": {
-                "type": "plain_text",
-                "text": f"Have an answer you'd like to contribute? Save it here:",
-                "emoji": True
-            }
-        })
+            {
+                "type": "section",
+                "text": {
+                    "type": "plain_text",
+                    "text": f"Channel ID: {channel}",
+                    "emoji": True
+                }
+		    }
+        ])
         client.views_update(
             hash=response["view"]["hash"],
             view_id=response["view"]["id"],
@@ -397,7 +544,6 @@ def help_command(ack, respond, command, client, request):
 @app.event("app_home_opened")
 def handle_app_home_opened(client, event, say):
     user_id = event["user"]
-    channel_id = event["channel"]
     db = database.SessionLocal()
     try:
         logged_user = crud.get_logged_user(db, user_id)
@@ -420,12 +566,11 @@ def handle_app_home_opened(client, event, say):
             db.add(user)
             db.commit()
             db.refresh(user)
-            notion_id = os.environ["NOTION_CLIENT_ID"]
-            redirect_uri = os.environ["NOTION_REDIRECT_URI"]
             say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
-                f"Integrate with <https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user_id}-{team_id}-{channel_id}|Notion>. Takes up to 1 hour to process all documents.\n\n"
-                "To search enter `/hashy <your query here>`\n\n"
-                "Type in `/hashy help` to pull up these instructions again\n\n"
+                f"1. Identify a channel you want to share your documents with\n\n"
+                f"2. Setup an integration with the command `/hashy integrate`\n\n"
+                f"3. Search with the command `/hashy <your query here>`\n\n"
+                "Type in `/hashy help` to view these commands\n\n"
             )
     except:
         db.rollback()
@@ -453,7 +598,7 @@ async def oauth_redirect(req: Request):
 
 @api.get("/google/oauth_redirect")
 async def google_authorize(req: Request, state):
-    user_id, team_id, _ = state.split("-")
+    user_id, team_id, channel_id = state.split("-")
     config = {
         "web":{
             "client_id": os.environ["GOOGLE_CLIENT_ID"],
@@ -476,17 +621,24 @@ async def google_authorize(req: Request, state):
     credentials = flow.credentials
     db = database.SessionLocal()
     try:
-        fields = {
-            "user_id": user_id,
-            "team": team_id,
-            "encrypted_token": credentials.refresh_token,
-        }
         token = crud.get_google_token(db, user_id)
         if not token:
+            fields = {
+                "user_id": user_id,
+                "team": team_id,
+                "encrypted_token": credentials.refresh_token,
+                "channel_id": channel_id
+            }
             token = crud.create_google_token(fields)
             db.add(token)
             db.commit()
             db.refresh(token)
+        else:
+            fields = {
+                "channel_id": channel_id
+            }
+            crud.update_google_token(db, token.id, fields)
+            db.commit()
     except:
         db.rollback()
         raise
@@ -494,7 +646,7 @@ async def google_authorize(req: Request, state):
         db.close()
     app_id = os.environ["GOOGLE_APP_ID"]
     key = os.environ["GOOGLE_API_KEY"]
-    response = RedirectResponse(f"/google-picker/{credentials.token}?team={team_id}&user={user_id}&id={app_id}&key={key}")
+    response = RedirectResponse(f"/google-picker/{credentials.token}?team={team_id}&user={user_id}&id={app_id}&key={key}&channel={channel_id}")
     return response
 
 
@@ -515,6 +667,7 @@ async def google_picker(token, team, user, id, key):
             var team = urlParams.get("team");
             var user = urlParams.get("user");
             var appId = urlParams.get("id");
+            var channel = urlParams.get("channel");
 
             function loadPicker() {
                 gapi.load('picker', {'callback': onPickerApiLoad});
@@ -551,7 +704,7 @@ async def google_picker(token, team, user, id, key):
                     var theUrl = `https://${window.location.hostname}/google/process-documents`;
                     xmlhttp.open("POST", theUrl);
                     xmlhttp.setRequestHeader("Content-Type", "application/json");
-                    xmlhttp.send(JSON.stringify({"team": team, "user": user, "token": oauthToken, file_ids: fileIds}));
+                    xmlhttp.send(JSON.stringify({"team": team, "user": user, "channel": channel, "token": oauthToken, file_ids: fileIds}));
                     window.location.assign(`https://app.slack.com/client/${team}`);
                 }
             }
@@ -571,6 +724,7 @@ async def google_picker(token, team, user, id, key):
 def process_google_documents(upload: schemas.GooglePickerUpload):
     user_id = upload.user
     team_id = upload.team
+    channel_id = upload.channel
     db = database.SessionLocal()
     token = crud.get_google_token(db, user_id)
     db.close()
@@ -593,6 +747,17 @@ def process_google_documents(upload: schemas.GooglePickerUpload):
             "file_id": file_info["id"]
         }
         queue.send_message(MessageBody=json.dumps(page))
+    
+    bot = installation_store.find_bot(
+        enterprise_id=None,
+        team_id=team_id,
+    )
+    client = WebClient(token=bot.bot_token)
+    user = client.users_info(user=user_id)["user"]["name"]
+    client.chat_postMessage(
+        channel=channel_id,
+        text=f"@{user} has allowed this channel to search Google Drive documents right here in Slack! Install the Hashy app and start searching from this channel with the command `/hashy <your query here>`."
+    )
 
 
 @api.get("/notion/oauth_redirect")
@@ -629,7 +794,8 @@ async def notion_oauth_redirect(code, state):
             "notion_user_id": notion_user_id,
             "encrypted_token": access_token,
             "bot_id": bot_id,
-            "workspace_id": workspace_id
+            "workspace_id": workspace_id,
+            "channel_id": channel_id
         }
         token = crud.get_notion_token(db, user_id)
         if token:
@@ -694,9 +860,10 @@ async def notion_oauth_redirect(code, state):
         team_id=team_id,
     )
     client = WebClient(token=bot.bot_token)
+    user = client.users_info(user=user_id)["user"]["name"]
     client.chat_postMessage(
         channel=channel_id,
-        text=f"Integrated with your Notion account! Start searching your documents as Hashy continues to stay in sync with your Notion account."
+        text=f"@{user} has allowed this channel to search Notion documents right here in Slack! Install the Hashy app and start searching from this channel with the command `/hashy <your query here>`."
     )
 
     response = RedirectResponse(f"https://app.slack.com/client/{team_id}")
