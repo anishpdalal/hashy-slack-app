@@ -17,7 +17,7 @@ import requests
 from sentence_transformers import SentenceTransformer, util
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 from slack_sdk.web import WebClient
-from sqlalchemy import create_engine, Column, Integer, PickleType, String, Text, DateTime, log
+from sqlalchemy import create_engine, Column, Integer, PickleType, String, Text, DateTime, or_
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
@@ -100,6 +100,7 @@ class NotionToken(Base):
     )
     bot_id = Column(String, nullable=False)
     workspace_id = Column(String, nullable=False)
+    channel_id = Column(String)
 
 
 class GoogleToken(Base):
@@ -110,6 +111,7 @@ class GoogleToken(Base):
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    channel_id = Column(String)
 
 
 def _get_queries(db, team):
@@ -185,13 +187,14 @@ def _get_pdf_document_text(url, team):
     return text
 
 
-def _get_notion_document_text(file_id, user):
+def _get_notion_document_text(file_id, user, channel):
     db = SessionLocal()
     try:
-        token = db.query(NotionToken).filter(NotionToken.user_id == user).first().encrypted_token
+        token = db.query(NotionToken).filter(or_(NotionToken.user_id == user, NotionToken.channel_id == channel)).first()
+        encrypted_token = token.encrypted_token
         api_url = f"https://api.notion.com/v1/blocks/{file_id}/children"
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {encrypted_token}",
             "Notion-Version": "2021-08-16"
         }
         params = {}
@@ -225,6 +228,9 @@ def _get_notion_document_text(file_id, user):
         todos_text = ". ".join(todos)
         text.append(todos_text)
         processed_text = " ".join(" ".join(text).encode("ascii", "ignore").decode().strip().split())
+        DOCS[file_id]["allowed_users"].append(token.user_id)
+        if token.channel_id:
+            DOCS[file_id]["allowed_channels"].append(token.channel_id)
     except:
         raise
     finally:
@@ -326,7 +332,7 @@ def _get_gdrive_text(file_id, token):
     return text
 
 
-def _get_k_most_similar_docs(docs, embedding, user, k=1):
+def _get_k_most_similar_docs(docs, embedding, user, channel, k=1):
     if len(docs) == 0:
         return
     scores = []
@@ -347,34 +353,50 @@ def _get_k_most_similar_docs(docs, embedding, user, k=1):
             team = doc.team
             file_id = doc.file_id
             filetype = doc.type
-            if file_id in DOCS:
-                text = DOCS[file_id]
+            if file_id in DOCS and ((user in DOCS[file_id]["allowed_users"]) or channel in DOCS[file_id]["allowed_channels"]):
+                text = DOCS[file_id]["text"]
             else:
+                DOCS[file_id] = {"text": None, "allowed_users": [], "allowed_channels": []}
                 try:
                     if filetype == "notion":
-                        text = _get_notion_document_text(file_id, user)
+                        text = _get_notion_document_text(file_id, user, channel)
+                        DOCS[file_id]["text"] = text
                     elif filetype == "drive#file|application/pdf":
                         db = SessionLocal()
-                        google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
+                        google_token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
                         db.close()
                         text = _get_gdrive_pdf_text(file_id, google_token)
+                        DOCS[file_id]["text"] = text
+                        DOCS[file_id]["allowed_users"].append(google_token.user_id)
+                        if google_token.channel_id:
+                            DOCS[file_id]["allowed_channels"].append(google_token.channel_id)
                     elif filetype == "drive#file|application/vnd.google-apps.document":
                         db = SessionLocal()
-                        google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
+                        google_token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
                         db.close()
                         text = _get_google_doc_text(file_id, google_token)
+                        DOCS[file_id]["text"] = text
+                        DOCS[file_id]["allowed_users"].append(google_token.user_id)
+                        if google_token.channel_id:
+                            DOCS[file_id]["allowed_channels"].append(google_token.channel_id)
                     elif filetype == "drive#file|text/plain":
                         db = SessionLocal()
-                        google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
+                        google_token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
                         db.close()
                         text = _get_gdrive_text(file_id, google_token)
+                        DOCS[file_id]["text"] = text
+                        DOCS[file_id]["allowed_users"].append(google_token.user_id)
+                        if google_token.channel_id:
+                            DOCS[file_id]["allowed_channels"].append(google_token.channel_id)
                     elif name.endswith(".pdf") or name.endswith(".docx"):
                         text = _get_pdf_document_text(private_url, team)
+                        DOCS[file_id]["text"] = text
                     else:
                         text = _get_txt_document_text(private_url, team)
+                        DOCS[file_id]["text"] = text
                 except:
                     continue
-                DOCS[file_id] = text
+
 
             sentences = re.split(REGEX_EXP, text)
             corpus_id = scores[idx]["corpus_id"]
@@ -423,16 +445,24 @@ def handler(event, context):
     elif path == "/search":
         team = body["team"]
         user = body["user"]
+        channel = body["channel"]
         query = body["query"]
-        results = {}
+        results = {
+            "summary": None,
+            "answers": [],
+            "search_results": []
+        }
         db = SessionLocal()
         try:
             query_embedding = search_model.encode([query])
             results["answers"] = _get_most_similar_query(db, team, query_embedding)
             docs = _get_documents(db, team)
             k = body.get("count", 1)
-            results["search_results"] = _get_k_most_similar_docs(docs, query_embedding, user, k=k)
-            results["summary"] = _get_summary(results["search_results"][0]["result"])
+            results["search_results"] = _get_k_most_similar_docs(docs, query_embedding, user, channel, k=k)
+            if results["search_results"]:
+                results["summary"] = _get_summary(results["search_results"][0]["result"])
+            else:
+                results["summary"] = None
         except:
             db.rollback()
             raise

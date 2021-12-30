@@ -98,3 +98,7 @@ def get_google_token(db: Session, user_id: str):
 def create_google_token(fields: Dict[str, Any]):
     token = models.GoogleToken(**fields)
     return token
+
+
+def update_google_token(db: Session, id: int, fields: Dict[str, Any]):
+    db.query(models.GoogleToken).filter_by(id=id).update(fields)
