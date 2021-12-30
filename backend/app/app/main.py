@@ -329,11 +329,11 @@ def handle_view_events(ack, body, client, view):
     if integration.startswith("notion"):
         notion_id = os.environ["NOTION_CLIENT_ID"]
         redirect_uri = os.environ["NOTION_REDIRECT_URI"]
-        msg = f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{target_channel}|Notion Integration Link>"
+        msg = f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{target_channel}|Click Here to integrate with Notion>"
     else:
         google_redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
         google_client_id = os.environ["GOOGLE_CLIENT_ID"]
-        msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}-{target_channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Google Drive Integration Link>"
+        msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}-{target_channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
     ack()
     client.chat_postMessage(channel=channel, text=msg)
 
@@ -345,10 +345,6 @@ def help_command(ack, respond, command, client):
     channel = command["channel_id"]
     user = command["user_id"]
     team = command["team_id"]
-    notion_id = os.environ["NOTION_CLIENT_ID"]
-    redirect_uri = os.environ["NOTION_REDIRECT_URI"]
-    google_redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
-    google_client_id = os.environ["GOOGLE_CLIENT_ID"]
     if command_text == "help":
         respond({
             "blocks": [
@@ -356,21 +352,14 @@ def help_command(ack, respond, command, client):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"Integrate with <https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{channel}|Notion>"
+                        "text": f"To create or modify an integration, enter `/hashy integrate`"
                     }
                 },
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"Integrate with <https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}-{channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Google Drive>."
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"To search enter `/hashy <your query here>`"
+                        "text": f"To search, enter `/hashy <your query here>`"
                     }
                 }
             ]
@@ -555,7 +544,6 @@ def help_command(ack, respond, command, client):
 @app.event("app_home_opened")
 def handle_app_home_opened(client, event, say):
     user_id = event["user"]
-    channel_id = event["channel"]
     db = database.SessionLocal()
     try:
         logged_user = crud.get_logged_user(db, user_id)
@@ -578,12 +566,11 @@ def handle_app_home_opened(client, event, say):
             db.add(user)
             db.commit()
             db.refresh(user)
-            notion_id = os.environ["NOTION_CLIENT_ID"]
-            redirect_uri = os.environ["NOTION_REDIRECT_URI"]
             say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
-                f"Integrate with <https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user_id}-{team_id}-{channel_id}|Notion>. Takes up to 1 hour to process all documents.\n\n"
-                "To search enter `/hashy <your query here>`\n\n"
-                "Type in `/hashy help` to pull up these instructions again\n\n"
+                f"1. Identify a channel you want to share your documents with\n\n"
+                f"2. Setup an integration with the command `/hashy integrate`\n\n"
+                f"3. Search with the command `/hashy <your query here>`\n\n"
+                "Type in `/hashy help` to view these commands\n\n"
             )
     except:
         db.rollback()
