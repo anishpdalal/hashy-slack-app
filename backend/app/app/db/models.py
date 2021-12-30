@@ -60,6 +60,7 @@ class NotionToken(Base):
     )
     bot_id = Column(String, nullable=False)
     workspace_id = Column(String, nullable=False)
+    channel_id = Column(String)
 
 
 class GoogleToken(Base):
@@ -70,4 +71,5 @@ class GoogleToken(Base):
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    channel_id = Column(String)
  
