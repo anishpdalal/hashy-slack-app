@@ -743,6 +743,7 @@ def process_google_documents(upload: schemas.GooglePickerUpload):
         page = {
             "team": team_id,
             "user": user_id,
+            "channel": channel_id,
             "url": f"https://drive.google.com/file/d/{file_info['id']}",
             "filetype": f"drive#file|{file_info['mimeType']}",
             "file_name": file_info["name"],
@@ -850,6 +851,7 @@ async def notion_oauth_redirect(code, state):
         page = {
             "team": team_id,
             "user": user_id,
+            "channel": channel_id,
             "url": url,
             "filetype": "notion",
             "file_name": file_name,
