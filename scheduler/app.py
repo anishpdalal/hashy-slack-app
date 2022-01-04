@@ -1,10 +1,12 @@
 import datetime
+import itertools
 import json
 import logging
 import os
 from typing import Any
 
 import boto3
+import pinecone
 import pytz
 import requests
 from sqlalchemy import create_engine, Column, Integer, PickleType, String, Text, DateTime
@@ -37,6 +39,7 @@ class NotionToken(Base):
     )
     bot_id = Column(String, nullable=False)
     workspace_id = Column(String, nullable=False)
+    channel_id = Column(String)
 
 
 class Document(Base):
@@ -47,7 +50,8 @@ class Document(Base):
     name = Column(String, nullable=False)
     url = Column(String, nullable=False)
     type = Column(String)
-    embeddings = Column(PickleType, nullable=False)
+    embeddings = Column(PickleType)
+    num_vectors = Column(Integer)
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -58,16 +62,28 @@ class Document(Base):
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-user = os.environ["POSTGRES_USER"]
+pg_user = os.environ["POSTGRES_USER"]
 password = os.environ["POSTGRES_PASSWORD"]
 host = os.environ["POSTGRES_HOST"]
 database = os.environ["POSTGRES_DB"]
 port = os.environ["POSTGRES_PORT"]
 
 
+def chunks(iterable, batch_size=100):
+    """A helper function to break an iterable into chunks of size batch_size."""
+    it = iter(iterable)
+    chunk = tuple(itertools.islice(it, batch_size))
+    while chunk:
+        yield chunk
+        chunk = tuple(itertools.islice(it, batch_size))
+
+
 def handler(event, context):
-    SQLALCHEMY_DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+    SQLALCHEMY_DATABASE_URL = f"postgresql://{pg_user}:{password}@{host}:{port}/{database}"
     engine = create_engine(SQLALCHEMY_DATABASE_URL)
+    PINECONE_KEY = os.environ["PINECONE_KEY"]
+    pinecone.init(api_key=PINECONE_KEY, environment="us-west1-gcp")
+    index = pinecone.Index(index_name="semantic-text-search")
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     db = SessionLocal()
     sqs = boto3.resource("sqs", region_name="us-east-1")
@@ -127,6 +143,7 @@ def handler(event, context):
                 page = {
                     "team": token.team,
                     "user": token.user_id,
+                    "channel": token.channel_id,
                     "url": url,
                     "filetype": "notion",
                     "file_name": file_name,
@@ -140,10 +157,18 @@ def handler(event, context):
         logger.info(f"Deleting {len(docs_to_delete)} docs")
         for doc_id in docs_to_delete:
             logger.info(f"Deleting {doc_id}")
+            doc = db.query(Document).filter(Document.file_id == doc_id).first()
+            user = doc.user
+            num_vectors = doc.num_vectors
             db.query(Document).filter(Document.file_id == doc_id).delete()
+            if num_vectors:
+                delete_data_generator = map(lambda i: f"{user}-{doc_id}-{i}", range(num_vectors))
+                for ids_chunk in chunks(delete_data_generator, batch_size=100):
+                    index.delete(ids=list(ids_chunk))
         db.commit()
 
-    except:
+    except Exception as e:
+        logger.error(e)
         raise
     finally:
         db.close()
