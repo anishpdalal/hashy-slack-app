@@ -12,6 +12,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import openai
+import pinecone
 import pdfminer.high_level
 import requests
 from sentence_transformers import SentenceTransformer, util
@@ -49,6 +50,11 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 DOCS = {}
 
+PINECONE_KEY = os.environ["PINECONE_KEY"]
+pinecone.init(api_key=PINECONE_KEY, environment="us-west1-gcp")
+index = pinecone.Index(index_name="semantic-text-search")
+
+
 @as_declarative()
 class Base:
     id: Any
@@ -82,7 +88,8 @@ class Document(Base):
     name = Column(String, nullable=False)
     type = Column(String)
     url = Column(String, nullable=False)
-    embeddings = Column(PickleType, nullable=False)
+    embeddings = Column(PickleType)
+    num_vectors = Column(Integer)
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -332,86 +339,110 @@ def _get_gdrive_text(file_id, token):
     return text
 
 
-def _get_k_most_similar_docs(docs, embedding, user, channel, k=1):
-    if len(docs) == 0:
-        return
-    scores = []
-    doc_idx = []
-    for idx, obj in enumerate(docs):
-        res = util.semantic_search(embedding, pickle.loads(obj.embeddings), top_k=k)[0]
-        scores.append(res)
-        doc_idx.extend([idx] * len(res))
-    scores = list(itertools.chain(*scores))
-    sorted_idx = sorted(range(len(scores)), key=lambda x: scores[x]["score"], reverse=True)
+# def _get_k_most_similar_docs(docs, embedding, user, channel, k=1):
+#     if len(docs) == 0:
+#         return
+#     scores = []
+#     doc_idx = []
+#     for idx, obj in enumerate(docs):
+#         res = util.semantic_search(embedding, pickle.loads(obj.embeddings), top_k=k)[0]
+#         scores.append(res)
+#         doc_idx.extend([idx] * len(res))
+#     scores = list(itertools.chain(*scores))
+#     sorted_idx = sorted(range(len(scores)), key=lambda x: scores[x]["score"], reverse=True)
+#     results = []
+#     for idx in sorted_idx[:k]:
+#         score = scores[idx]["score"]
+#         if score >= 0.3:
+#             doc = docs[doc_idx[idx]]
+#             name = doc.name
+#             private_url = doc.url
+#             team = doc.team
+#             file_id = doc.file_id
+#             filetype = doc.type
+#             if file_id in DOCS and ((user in DOCS[file_id]["allowed_users"]) or channel in DOCS[file_id]["allowed_channels"]):
+#                 text = DOCS[file_id]["text"]
+#             else:
+#                 DOCS[file_id] = {"text": None, "allowed_users": [], "allowed_channels": []}
+#                 try:
+#                     if filetype == "notion":
+#                         text = _get_notion_document_text(file_id, user, channel)
+#                         DOCS[file_id]["text"] = text
+#                     elif filetype == "drive#file|application/pdf":
+#                         db = SessionLocal()
+#                         google_token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
+#                         db.close()
+#                         text = _get_gdrive_pdf_text(file_id, google_token)
+#                         DOCS[file_id]["text"] = text
+#                         DOCS[file_id]["allowed_users"].append(google_token.user_id)
+#                         if google_token.channel_id:
+#                             DOCS[file_id]["allowed_channels"].append(google_token.channel_id)
+#                     elif filetype == "drive#file|application/vnd.google-apps.document":
+#                         db = SessionLocal()
+#                         google_token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
+#                         db.close()
+#                         text = _get_google_doc_text(file_id, google_token)
+#                         DOCS[file_id]["text"] = text
+#                         DOCS[file_id]["allowed_users"].append(google_token.user_id)
+#                         if google_token.channel_id:
+#                             DOCS[file_id]["allowed_channels"].append(google_token.channel_id)
+#                     elif filetype == "drive#file|text/plain":
+#                         db = SessionLocal()
+#                         google_token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
+#                         db.close()
+#                         text = _get_gdrive_text(file_id, google_token)
+#                         DOCS[file_id]["text"] = text
+#                         DOCS[file_id]["allowed_users"].append(google_token.user_id)
+#                         if google_token.channel_id:
+#                             DOCS[file_id]["allowed_channels"].append(google_token.channel_id)
+#                     elif name.endswith(".pdf") or name.endswith(".docx"):
+#                         text = _get_pdf_document_text(private_url, team)
+#                         DOCS[file_id]["text"] = text
+#                     else:
+#                         text = _get_txt_document_text(private_url, team)
+#                         DOCS[file_id]["text"] = text
+#                 except:
+#                     continue
+
+
+#             sentences = re.split(REGEX_EXP, text)
+#             corpus_id = scores[idx]["corpus_id"]
+#             if len(sentences) == 1:
+#                 snippet = sentences[corpus_id]
+#             else:
+#                 snippet = " ".join(sentences[corpus_id:corpus_id+2])
+#             snippet_processed = " ".join(snippet.split("\n")).strip()
+#             results.append({
+#                 "source": private_url,
+#                 "name": name,
+#                 "text": None,
+#                 "team": team,
+#                 "last_modified": None,
+#                 "result": snippet_processed
+#             })
+#     return results
+
+def _get_k_most_similar_docs(team, embedding, user, channel, k=1):
+    query_results = index.query(
+        queries=[embedding.tolist()],
+        top_k=k,
+        filter={
+            "team": {"$eq": team},
+            "$or": [{"user": {"$eq": user}}, {"channel": {"$eq": channel}}]
+        },
+        include_metadata=True
+    )
     results = []
-    for idx in sorted_idx[:k]:
-        score = scores[idx]["score"]
-        if score >= 0.3:
-            doc = docs[doc_idx[idx]]
-            name = doc.name
-            private_url = doc.url
-            team = doc.team
-            file_id = doc.file_id
-            filetype = doc.type
-            if file_id in DOCS and ((user in DOCS[file_id]["allowed_users"]) or channel in DOCS[file_id]["allowed_channels"]):
-                text = DOCS[file_id]["text"]
-            else:
-                DOCS[file_id] = {"text": None, "allowed_users": [], "allowed_channels": []}
-                try:
-                    if filetype == "notion":
-                        text = _get_notion_document_text(file_id, user, channel)
-                        DOCS[file_id]["text"] = text
-                    elif filetype == "drive#file|application/pdf":
-                        db = SessionLocal()
-                        google_token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
-                        db.close()
-                        text = _get_gdrive_pdf_text(file_id, google_token)
-                        DOCS[file_id]["text"] = text
-                        DOCS[file_id]["allowed_users"].append(google_token.user_id)
-                        if google_token.channel_id:
-                            DOCS[file_id]["allowed_channels"].append(google_token.channel_id)
-                    elif filetype == "drive#file|application/vnd.google-apps.document":
-                        db = SessionLocal()
-                        google_token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
-                        db.close()
-                        text = _get_google_doc_text(file_id, google_token)
-                        DOCS[file_id]["text"] = text
-                        DOCS[file_id]["allowed_users"].append(google_token.user_id)
-                        if google_token.channel_id:
-                            DOCS[file_id]["allowed_channels"].append(google_token.channel_id)
-                    elif filetype == "drive#file|text/plain":
-                        db = SessionLocal()
-                        google_token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
-                        db.close()
-                        text = _get_gdrive_text(file_id, google_token)
-                        DOCS[file_id]["text"] = text
-                        DOCS[file_id]["allowed_users"].append(google_token.user_id)
-                        if google_token.channel_id:
-                            DOCS[file_id]["allowed_channels"].append(google_token.channel_id)
-                    elif name.endswith(".pdf") or name.endswith(".docx"):
-                        text = _get_pdf_document_text(private_url, team)
-                        DOCS[file_id]["text"] = text
-                    else:
-                        text = _get_txt_document_text(private_url, team)
-                        DOCS[file_id]["text"] = text
-                except:
-                    continue
-
-
-            sentences = re.split(REGEX_EXP, text)
-            corpus_id = scores[idx]["corpus_id"]
-            if len(sentences) == 1:
-                snippet = sentences[corpus_id]
-            else:
-                snippet = " ".join(sentences[corpus_id:corpus_id+2])
-            snippet_processed = " ".join(snippet.split("\n")).strip()
+    matches = query_results["results"][0]["matches"]
+    for match in matches:
+        if match["score"] >= 0.3:
             results.append({
-                "source": private_url,
-                "name": name,
+                "source": match["metadata"]["url"],
+                "name": match["metadata"]["title"],
                 "text": None,
                 "team": team,
                 "last_modified": None,
-                "result": snippet_processed
+                "result": match["metadata"]["text"]
             })
     return results
 
@@ -456,9 +487,8 @@ def handler(event, context):
         try:
             query_embedding = search_model.encode([query])
             results["answers"] = _get_most_similar_query(db, team, query_embedding)
-            docs = _get_documents(db, team)
             k = body.get("count", 1)
-            results["search_results"] = _get_k_most_similar_docs(docs, query_embedding, user, channel, k=k)
+            results["search_results"] = _get_k_most_similar_docs(team, query_embedding, user, channel, k=k)
             if results["search_results"]:
                 results["summary"] = _get_summary(results["search_results"][0]["result"])
             else:

@@ -31,7 +31,8 @@ class Document(Base):
     name = Column(String, nullable=False)
     type = Column(String)
     url = Column(String, nullable=False)
-    embeddings = Column(PickleType, nullable=False)
+    embeddings = Column(PickleType)
+    num_vectors = Column(Integer)
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
