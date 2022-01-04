@@ -1,8 +1,8 @@
 import io
+import itertools
 import json
 import logging
 import os
-import pickle
 import re
 from typing import Any
 
@@ -10,6 +10,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
+import pinecone
 import pdfminer.high_level
 import requests
 from slack_sdk.web import WebClient
@@ -55,7 +56,8 @@ class Document(Base):
     name = Column(String, nullable=False)
     type = Column(String)
     url = Column(String, nullable=False)
-    embeddings = Column(PickleType, nullable=False)
+    embeddings = Column(PickleType)
+    num_vectors = Column(Integer)
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -255,6 +257,23 @@ def _get_gdrive_text(file_id, token):
     return text
 
 
+def chunks(iterable, batch_size=100):
+    """A helper function to break an iterable into chunks of size batch_size."""
+    it = iter(iterable)
+    chunk = tuple(itertools.islice(it, batch_size))
+    while chunk:
+        yield chunk
+        chunk = tuple(itertools.islice(it, batch_size))
+
+
+def extract_snippet(sentences, idx):
+    if len(sentences) == 1:
+        snippet = sentences[idx]
+    else:
+        snippet = " ".join(sentences[idx: idx+2])
+    snippet_processed = " ".join(snippet.split("\n")).strip()
+    return snippet_processed
+
 def handler(event, context):
     SQLALCHEMY_DATABASE_URL = f"postgresql://{pg_user}:{password}@{host}:{port}/{database}"
     engine = create_engine(SQLALCHEMY_DATABASE_URL)
@@ -264,6 +283,9 @@ def handler(event, context):
         engine=engine
     )
     search_model = SentenceTransformer(os.environ["DATA_DIR"])
+    PINECONE_KEY = os.environ["PINECONE_KEY"]
+    pinecone.init(api_key=PINECONE_KEY, environment="us-west1-gcp")
+    index = pinecone.Index(index_name="semantic-text-search")
     logger.info(f"Processing {len(event['Records'])}")
     for record in event['Records']:
         if isinstance(record["body"], str):
@@ -330,19 +352,20 @@ def handler(event, context):
         else:
             continue
         sentences = re.split(REGEX_EXP, text)
-        doc_embeddings = search_model.encode(sentences)
+        embeddings = search_model.encode(sentences).tolist()
         db = SessionLocal()
         fields = {
             "team": team,
             "name": file_name,
             "user": user,
             "url": url,
-            "embeddings": pickle.dumps(doc_embeddings),
+            "num_vectors": len(sentences),
             "file_id": file_id,
             "type": filetype or mimetype
         }
         try:
             doc = db.query(Document).filter(Document.file_id == file_id).first()
+            prev_num_vectors = doc.num_vectors if doc and doc.num_vectors else 0
             if doc:
                 db.query(Document).filter_by(id=doc.id).update(fields)
                 db.commit()
@@ -351,21 +374,31 @@ def handler(event, context):
                 db.add(doc)
                 db.commit()
                 db.refresh(doc)
-        except:
+            upsert_data_generator = map(lambda i: (
+                f"{user}-{file_id}-{i}",
+                embeddings[i],
+                {
+                    "title": file_name,
+                    "team": team,
+                    "user": user,
+                    "channel": channel or "N/A",
+                    "url": url,
+                    "text": extract_snippet(sentences, i)
+
+                }), range(len(sentences)))
+            for ids_vectors_chunk in chunks(upsert_data_generator, batch_size=100):
+                index.upsert(vectors=ids_vectors_chunk)
+            logger.info(f"Prev Number of Vectors: {prev_num_vectors}, Len Sentences: {len(sentences)}")
+            if prev_num_vectors > len(sentences):
+                delete_data_generator = map(lambda i: f"{user}-{file_id}-{i}", range(len(sentences), prev_num_vectors))
+                for ids_chunk in chunks(delete_data_generator, batch_size=100):
+                    logger.info(list(ids_chunk))
+                    index.delete(ids=list(ids_chunk))
+        except Exception as e:
+            logger.error(e)
             db.rollback()
             raise
         finally:
             db.close()
-                
-        if channel:
-            bot = installation_store.find_bot(
-                enterprise_id=None,
-                team_id=team,
-            )
-            client = WebClient(token=bot.bot_token)
-            client.chat_postMessage(
-                channel=channel,
-                text=f"Finished processing File {file_name}"
-            )
-    
+
     engine.dispose()
