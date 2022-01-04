@@ -6,6 +6,7 @@ google-auth
 google-auth-oauthlib
 google-auth-httplib2
 openai
+pinecone-client
 pdfminer.six
 protobuf
 psycopg2-binary

@@ -1,6 +1,7 @@
 awslambdaric
 boto3
 cryptography
+pinecone-client
 psycopg2-binary
 pytz
 requests
