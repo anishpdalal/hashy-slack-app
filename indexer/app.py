@@ -152,6 +152,18 @@ def _get_notion_document_text(file_id, token):
             elif block["type"] == "numbered_list_item":
                 for snippet in block["numbered_list_item"]["text"]:
                     todos.append(snippet["text"]["content"])
+            elif block["type"] == "quote":
+                for snippet in block["quote"]["text"]:
+                    todos.append(snippet["text"]["content"])
+            elif block["type"] == "heading_1":
+                for snippet in block["heading_1"]["text"]:
+                    todos.append(snippet["text"]["content"])
+            elif block["type"] == "heading_2":
+                for snippet in block["heading_2"]["text"]:
+                    todos.append(snippet["text"]["content"])
+            elif block["type"] == "heading_3":
+                for snippet in block["heading_3"]["text"]:
+                    todos.append(snippet["text"]["content"])
             else:
                 pass
         todos_text = ". ".join(todos)
@@ -332,8 +344,6 @@ def handler(event, context):
             notion_token = db.query(NotionToken).filter(NotionToken.user_id == user).first().encrypted_token
             db.close()
             text = _get_notion_document_text(file_id, notion_token)
-            if not text:
-                continue
         elif filetype == "drive#file|application/pdf":
             db = SessionLocal()
             google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
@@ -351,7 +361,9 @@ def handler(event, context):
             text = _get_gdrive_text(file_id, google_token)
         else:
             continue
-        sentences = re.split(REGEX_EXP, text)
+        sentences = [file_name]
+        if type(text) == str and len(text) > 0:
+            sentences.extend(re.split(REGEX_EXP, text))
         embeddings = search_model.encode(sentences).tolist()
         db = SessionLocal()
         fields = {

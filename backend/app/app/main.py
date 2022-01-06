@@ -42,6 +42,8 @@ app_handler = SlackRequestHandler(app)
 sqs = boto3.resource("sqs", region_name="us-east-1")
 queue = sqs.get_queue_by_name(QueueName=os.getenv("SQS_QUEUE_NAME"))
 
+view_channel_map = {}
+
 
 @app.event("file_created")
 def handle_file_created_events(event, say):
@@ -100,7 +102,7 @@ def save_answer(ack, body, client):
     view_id = body["container"]["view_id"]
     team = body["team"]["id"]
     user = body["user"]["id"]
-    channel = body["view"]["blocks"][-1]["text"]["text"].split("Channel ID: ")[1]
+    channel = view_channel_map.get(view_id)
     text = [block["text"]["text"].split("Query: ")[1] for block in body["view"]["blocks"] if "Query:" in block.get("text", {}).get("text", "")][0]
     result = body["actions"][0]["value"]
     query = {
@@ -138,14 +140,6 @@ def save_answer(ack, body, client):
             "label": {
                 "type": "plain_text",
                 "text": f"Have an answer you'd like to contribute? Save it here:",
-                "emoji": True
-            }
-        },
-        {
-            "type": "section",
-            "text": {
-                "type": "plain_text",
-                "text": f"Channel ID: {channel}",
                 "emoji": True
             }
         }
@@ -516,16 +510,9 @@ def help_command(ack, respond, command, client):
                     "text": f"Have an answer you'd like to contribute? Save it here:",
                     "emoji": True
                 }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "plain_text",
-                    "text": f"Channel ID: {channel}",
-                    "emoji": True
-                }
-		    }
+            }
         ])
+        view_channel_map[response["view"]["id"]] = channel
         client.views_update(
             hash=response["view"]["hash"],
             view_id=response["view"]["id"],
