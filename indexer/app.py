@@ -361,9 +361,11 @@ def handler(event, context):
             text = _get_gdrive_text(file_id, google_token)
         else:
             continue
-        sentences = [file_name]
         if type(text) == str and len(text) > 0:
+            sentences = [f"{file_name}."]
             sentences.extend(re.split(REGEX_EXP, text))
+        else:
+            continue
         embeddings = search_model.encode(sentences).tolist()
         db = SessionLocal()
         fields = {
