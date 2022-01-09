@@ -6,7 +6,6 @@ import os
 from typing import Any
 
 import boto3
-import pinecone
 import pytz
 import requests
 from sqlalchemy import create_engine, Column, Integer, PickleType, String, Text, DateTime
@@ -69,7 +68,7 @@ database = os.environ["POSTGRES_DB"]
 port = os.environ["POSTGRES_PORT"]
 
 
-def chunks(iterable, batch_size=100):
+def chunks(iterable, batch_size=10):
     """A helper function to break an iterable into chunks of size batch_size."""
     it = iter(iterable)
     chunk = tuple(itertools.islice(it, batch_size))
@@ -81,23 +80,31 @@ def chunks(iterable, batch_size=100):
 def handler(event, context):
     SQLALCHEMY_DATABASE_URL = f"postgresql://{pg_user}:{password}@{host}:{port}/{database}"
     engine = create_engine(SQLALCHEMY_DATABASE_URL)
-    PINECONE_KEY = os.environ["PINECONE_KEY"]
-    pinecone.init(api_key=PINECONE_KEY, environment="us-west1-gcp")
-    index = pinecone.Index(index_name="semantic-text-search")
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     db = SessionLocal()
     sqs = boto3.resource("sqs", region_name="us-east-1")
     queue = sqs.get_queue_by_name(QueueName=os.getenv("SQS_QUEUE_NAME"))
     try:
-        tokens = db.query(NotionToken).all()
+        team = event.get("team")
+        user = event.get("user")
+        if team and user:
+            token = db.query(NotionToken).filter(
+                NotionToken.user_id == user,
+                NotionToken.team == team,
+            ).first()
+            tokens = [token] if token else []
+        else:
+            tokens = db.query(NotionToken).all()
         doc_ids = []
         returned_doc_ids = []
-        pages = []
+        upserts = []
+        deletes = []
         for token in tokens:
             team_doc_ids = [
                 doc.file_id for doc in db.query(Document).filter(
                     Document.team == token.team,
-                    Document.url.contains("notion.so")
+                    Document.user == token.user_id,
+                    Document.type == "notion"
                 ).options(load_only(Document.file_id, Document.url)).all()
             ]
             doc_ids.extend(team_doc_ids)
@@ -149,24 +156,21 @@ def handler(event, context):
                     "file_name": file_name,
                     "file_id": res["id"]
                 }
-                pages.append(page)
+                upserts.append({"MessageBody": json.dumps(page), "Id": res["id"]})
 
         doc_ids = set(doc_ids)
         returned_doc_ids = set(returned_doc_ids)
         docs_to_delete = doc_ids - returned_doc_ids
-        logger.info(f"Deleting {len(docs_to_delete)} docs")
         for doc_id in docs_to_delete:
-            logger.info(f"Deleting {doc_id}")
             doc = db.query(Document).filter(Document.file_id == doc_id).first()
-            user = doc.user
-            num_vectors = doc.num_vectors
-            db.query(Document).filter(Document.file_id == doc_id).delete()
-            if num_vectors:
-                delete_data_generator = map(lambda i: f"{user}-{doc_id}-{i}", range(num_vectors))
-                for ids_chunk in chunks(delete_data_generator, batch_size=100):
-                    index.delete(ids=list(ids_chunk))
-        db.commit()
-
+            page = {
+                "team": doc.team,
+                "user": doc.user,
+                "file_id": doc_id,
+                "num_vectors": doc.num_vectors,
+                "type": "delete"
+            }
+            deletes.append({"MessageBody": json.dumps(page), "Id": doc_id})
     except Exception as e:
         logger.error(e)
         raise
@@ -175,7 +179,10 @@ def handler(event, context):
     
     engine.dispose()
 
-    logger.info(f"Upserting {len(pages)} docs")
-    for page in pages:
-        logger.info(f"Upserting {page}")
-        queue.send_message(MessageBody=json.dumps(page))
+    logger.info(f"Upserting {len(upserts)} docs")
+    for chunk in chunks(upserts, batch_size=10):
+        queue.send_messages(Entries=chunk)
+    
+    logger.info(f"Deleting {len(deletes)} docs")
+    for chunk in chunks(deletes, batch_size=10):
+        queue.send_messages(Entries=chunk)

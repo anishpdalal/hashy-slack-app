@@ -305,6 +305,26 @@ def handler(event, context):
         else:
             payload = record["body"]
         logger.info(record['body'])
+        if payload.get("type") == "delete":
+            file_id = payload["file_id"]
+            try:
+                db = SessionLocal()
+                doc = db.query(Document).filter(Document.file_id == file_id).first()
+                user = doc.user
+                num_vectors = doc.num_vectors
+                db.query(Document).filter(Document.file_id == file_id).delete()
+                if num_vectors:
+                    delete_data_generator = map(lambda i: f"{user}-{file_id}-{i}", range(num_vectors))
+                    for ids_chunk in chunks(delete_data_generator, batch_size=100):
+                        index.delete(ids=list(ids_chunk))
+                db.commit()
+            except Exception as e:
+                logger.error(e)
+                raise
+            finally:
+                db.close()
+            continue
+
         file_name = payload["file_name"]
         url = payload["url"]
         team = payload["team"]

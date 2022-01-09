@@ -41,9 +41,11 @@ def create_document(db: Session, doc: schemas.DocumentCreate):
     return doc
 
 
-def get_documents(db: Session, team: str):
-    docs = db.query(models.Document).filter(models.Document.team == team).options(
-        load_only(models.Document.name, models.Document.url)
+def get_gdrive_documents(db: Session, user: str):
+    docs = db.query(models.Document).filter(
+        models.Document.user == user,
+        models.Document.type.contains("drive#file")).options(
+        load_only(models.Document.file_id)
     ).all()
     return docs
 

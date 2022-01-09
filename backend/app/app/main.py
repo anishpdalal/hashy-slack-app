@@ -1,5 +1,5 @@
 import base64
-import io
+import itertools
 import json
 import logging
 import os
@@ -7,11 +7,7 @@ import os
 import boto3
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from google.auth.transport.requests import Request as GRequest
-from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
 import requests
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
@@ -670,7 +666,7 @@ async def google_picker(token, team, user, id, key):
 
             function createPicker() {
                 if (pickerApiLoaded && oauthToken) {
-                    var DisplayView = new google.picker.DocsView().setMimeTypes("application/vnd.google-apps.document,application/pdf,text/plain").setIncludeFolders(true);
+                    var DisplayView = new google.picker.DocsView().setMimeTypes("application/vnd.google-apps.document,application/pdf,text/plain").setIncludeFolders(true).setSelectFolderEnabled(true);
                     var picker = new google.picker.PickerBuilder().
                         enableFeature(google.picker.Feature.MULTISELECT_ENABLED).
                         addView(DisplayView).
@@ -678,6 +674,7 @@ async def google_picker(token, team, user, id, key):
                         setOAuthToken(oauthToken).
                         setDeveloperKey(developerKey).
                         setCallback(pickerCallback).
+                        setTitle("Add files to include in the search index - Any unselected files will be removed if previously indexed").
                         build().
                         setVisible(true);
                 }
@@ -685,15 +682,19 @@ async def google_picker(token, team, user, id, key):
 
             function pickerCallback(data) {
                 if (data.action == google.picker.Action.PICKED) {
-                    var fileIds = [];
+                    var files = [];
                     for (let i = 0; i < data.docs.length; i++) {
-                        fileIds.push(data.docs[i].id);
+                        files.push({
+                            "file_id": data.docs[i].id,
+                            "file_name": data.docs[i].name,
+                            "mime_type": data.docs[i].mimeType
+                        });
                     }
                     var xmlhttp = new XMLHttpRequest();
                     var theUrl = `https://${window.location.hostname}/google/process-documents`;
                     xmlhttp.open("POST", theUrl);
                     xmlhttp.setRequestHeader("Content-Type", "application/json");
-                    xmlhttp.send(JSON.stringify({"team": team, "user": user, "channel": channel, "token": oauthToken, file_ids: fileIds}));
+                    xmlhttp.send(JSON.stringify({"team": team, "user": user, "channel": channel, "token": oauthToken, files: files}));
                     window.location.assign(`https://app.slack.com/client/${team}`);
                 }
             }
@@ -709,45 +710,61 @@ async def google_picker(token, team, user, id, key):
     return HTMLResponse(html)
 
 
+def chunks(iterable, batch_size=10):
+    """A helper function to break an iterable into chunks of size batch_size."""
+    it = iter(iterable)
+    chunk = tuple(itertools.islice(it, batch_size))
+    while chunk:
+        yield chunk
+        chunk = tuple(itertools.islice(it, batch_size))
+
+
 @api.post("/google/process-documents")
 def process_google_documents(upload: schemas.GooglePickerUpload):
     user_id = upload.user
     team_id = upload.team
     channel_id = upload.channel
     db = database.SessionLocal()
-    token = crud.get_google_token(db, user_id)
+    current_docs = crud.get_gdrive_documents(db, user_id)
     db.close()
-    creds = Credentials.from_authorized_user_info({
-        "refresh_token": token.encrypted_token,
-        "client_id": os.environ["GOOGLE_CLIENT_ID"],
-        "client_secret": os.environ["GOOGLE_SECRET_KEY"],
-        "scopes": ["https://www.googleapis.com/auth/drive.file"]
-    })
-    creds.refresh(GRequest())
-    service = build('drive', 'v3', credentials=creds)
-    for file_id in upload.file_ids:
-        file_info = service.files().get(fileId=file_id).execute()
-        page = {
-            "team": team_id,
-            "user": user_id,
-            "channel": channel_id,
-            "url": f"https://drive.google.com/file/d/{file_info['id']}",
-            "filetype": f"drive#file|{file_info['mimeType']}",
-            "file_name": file_info["name"],
-            "file_id": file_info["id"]
-        }
-        queue.send_message(MessageBody=json.dumps(page))
+    current_file_ids = set([doc.file_id for doc in current_docs])
+    uploaded_file_ids = set([file["file_id"] for file in upload.files])
+    files_to_upload = [
+        {
+            "Id": file["file_id"],
+            "MessageBody": json.dumps(
+                {
+                    "team": team_id,
+                    "user": user_id,
+                    "channel": channel_id,
+                    "url": f"https://drive.google.com/file/d/{file['file_id']}",
+                    "filetype": f"drive#file|{file['mime_type']}",
+                    "file_name": file["file_name"],
+                    "file_id": file["file_id"]
+                }
+            )
+        } for file in upload.files if file["file_id"] not in current_file_ids
+    ]
+    for files_chunk in chunks(files_to_upload, batch_size=10):
+        queue.send_messages(Entries=files_chunk)
     
-    bot = installation_store.find_bot(
-        enterprise_id=None,
-        team_id=team_id,
-    )
-    client = WebClient(token=bot.bot_token)
-    user = client.users_info(user=user_id)["user"]["name"]
-    client.chat_postMessage(
-        channel=channel_id,
-        text=f"@{user} has allowed this channel to search Google Drive documents right here in Slack! Install the Hashy app and start searching from this channel with the command `/hashy <your query here>`."
-    )
+    files_to_delete = [
+        {
+            "Id": file_id,
+            "MessageBody": json.dumps(
+                {
+                    "team": team_id,
+                    "user": user_id,
+                    "file_id": file_id,
+                    "num_vectors": crud.get_document(db, file_id).num_vectors,
+                    "type": "delete"
+                }
+            )
+        } for file_id in current_file_ids - uploaded_file_ids
+    ]
+
+    for files_chunk in chunks(files_to_delete, batch_size=10):
+        queue.send_messages(Entries=files_chunk)
 
 
 @api.get("/notion/oauth_redirect")
@@ -802,59 +819,12 @@ async def notion_oauth_redirect(code, state):
     finally:
         db.close()
     
-    request_body = {
-        "sort": {
-            "direction": "descending",
-            "timestamp": "last_edited_time"
-        },
-        "filter": {
-            "property": "object",
-            "value": "page"
-        }
-    }
-
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-type": "application/json",
-        "Notion-Version": "2021-08-16"
-    }
-    api_url = "https://api.notion.com/v1/search"
-    search_results = []
-    results = requests.post(api_url, headers=headers, data=json.dumps(request_body)).json()
-    search_results.extend(results["results"])
-    while results.get("has_more"):
-        request_body["start_cursor"] = results["next_cursor"]
-        results = requests.post(api_url, headers=headers, data=json.dumps(request_body)).json()
-        search_results.extend(results["results"])
-
-    logger.info(f"Processing {len(search_results)} Documents")
-    for res in search_results:
-        url = res["url"]
-        split_url = url.split("/")[-1].split("-")
-        if len(split_url) == 1:
-            file_name = "Untitled"
-        else:
-            file_name = " ".join(split_url[:-1])
-        page = {
-            "team": team_id,
-            "user": user_id,
-            "channel": channel_id,
-            "url": url,
-            "filetype": "notion",
-            "file_name": file_name,
-            "file_id": res["id"]
-        }
-        queue.send_message(MessageBody=json.dumps(page))
-
-    bot = installation_store.find_bot(
-        enterprise_id=None,
-        team_id=team_id,
-    )
-    client = WebClient(token=bot.bot_token)
-    user = client.users_info(user=user_id)["user"]["name"]
-    client.chat_postMessage(
-        channel=channel_id,
-        text=f"@{user} has allowed this channel to search Notion documents right here in Slack! Install the Hashy app and start searching from this channel with the command `/hashy <your query here>`."
+    lambda_client = boto3.client("lambda", region_name="us-east-1")
+    payload = {"team": team_id, "user": user_id}
+    lambda_client.invoke(
+        FunctionName=os.environ["LAMBDA_FUNCTION"],
+        InvocationType="Event",
+        Payload=json.dumps(payload)
     )
 
     response = RedirectResponse(f"https://app.slack.com/client/{team_id}")
