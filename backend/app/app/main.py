@@ -666,7 +666,7 @@ async def google_picker(token, team, user, id, key):
 
             function createPicker() {
                 if (pickerApiLoaded && oauthToken) {
-                    var DisplayView = new google.picker.DocsView().setMimeTypes("application/vnd.google-apps.document,application/pdf,text/plain").setIncludeFolders(true).setSelectFolderEnabled(true);
+                    var DisplayView = new google.picker.DocsView().setMimeTypes("application/vnd.google-apps.document,application/pdf,text/plain").setIncludeFolders(true);
                     var picker = new google.picker.PickerBuilder().
                         enableFeature(google.picker.Feature.MULTISELECT_ENABLED).
                         addView(DisplayView).
@@ -674,7 +674,7 @@ async def google_picker(token, team, user, id, key):
                         setOAuthToken(oauthToken).
                         setDeveloperKey(developerKey).
                         setCallback(pickerCallback).
-                        setTitle("Add files to include in the search index - Any unselected files will be removed if previously indexed").
+                        setTitle("Selected files will be included in the search index - Unselected files will be removed from the index").
                         build().
                         setVisible(true);
                 }
@@ -701,6 +701,11 @@ async def google_picker(token, team, user, id, key):
             </script>
         </head>
         <body>
+            <div style="width:15%; margin-top: 10%;">
+                <p style="color:black;"><b>Select All Files: Shift + a</b></p>
+                <p style="color:black;"><b>Clear All Selections: Shift + n</b></p>
+                <p style="color:black;"><b>Select/Unselect Individual Files: Hold Ctl/Cmd + click</b></p>
+            </div>
             <div id="result"></div>
             <!-- The Google API Loader script. -->
             <script type="text/javascript" src="https://apis.google.com/js/api.js?onload=loadPicker"></script>
