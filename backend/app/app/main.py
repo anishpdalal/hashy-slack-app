@@ -351,7 +351,28 @@ def help_command(ack, respond, command, client):
                         "type": "mrkdwn",
                         "text": f"To search, enter `/hashy <your query here>`"
                     }
-                }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"<https://www.loom.com/share/6cdd14a8ad1741939b1e990e5e111c7a?sharedAppSource=personal_library|Notion Integration Walk Through>"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"<https://www.loom.com/share/3056708a7f4f4825a7abeaef34bd1ec1?sharedAppSource=personal_library|GDrive Integration Walk Through>"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"<https://www.loom.com/share/82dbc6777d59420a933c720ccbe7347e?sharedAppSource=personal_library|Hashy Overview>"
+                    }
+                },
             ]
         })
     elif command_text == "integrate":
@@ -550,6 +571,7 @@ def handle_app_home_opened(client, event, say):
             db.commit()
             db.refresh(user)
             say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
+                "<https://www.loom.com/share/82dbc6777d59420a933c720ccbe7347e?sharedAppSource=personal_library|Here's a walk through of Hashy>\n\n"
                 f"1. Identify a channel you want to share your documents with and add hashy to it\n\n"
                 f"2. Setup an integration with the command `/hashy integrate`\n\n"
                 f"3. Search with the command `/hashy <your query here>`\n\n"
