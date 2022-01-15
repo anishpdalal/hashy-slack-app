@@ -688,10 +688,20 @@ async def google_picker(token, team, user, id, key):
 
             function createPicker() {
                 if (pickerApiLoaded && oauthToken) {
-                    var DisplayView = new google.picker.DocsView().setMimeTypes("application/vnd.google-apps.document,application/pdf,text/plain").setIncludeFolders(true);
+                    var DisplayView = new google.picker.DocsView().
+                        setMimeTypes("application/vnd.google-apps.document,application/pdf").
+                        setIncludeFolders(true).
+                        setMode(google.picker.DocsViewMode.LIST)
+                    var ShareView = new google.picker.DocsView().
+                        setMimeTypes("application/vnd.google-apps.document,application/pdf").
+                        setIncludeFolders(true).
+                        setMode(google.picker.DocsViewMode.LIST).
+                        setEnableDrives(true)
                     var picker = new google.picker.PickerBuilder().
                         enableFeature(google.picker.Feature.MULTISELECT_ENABLED).
+                        enableFeature(google.picker.Feature.SUPPORT_DRIVES).
                         addView(DisplayView).
+                        addView(ShareView).
                         setAppId(appId).
                         setOAuthToken(oauthToken).
                         setDeveloperKey(developerKey).
