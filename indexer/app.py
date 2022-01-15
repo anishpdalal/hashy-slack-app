@@ -379,11 +379,16 @@ def handler(event, context):
             google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
             db.close()
             text = _get_gdrive_text(file_id, google_token)
+        elif filetype == "drive#file|application/vnd.google-apps.spreadsheet":
+            text = file_name
         else:
             continue
         if type(text) == str and len(text) > 0:
-            sentences = [f"{file_name}."]
-            sentences.extend(re.split(REGEX_EXP, text))
+            if filetype == "drive#file|application/vnd.google-apps.spreadsheet":
+                sentences = [file_name]
+            else:
+                sentences = [f"{file_name}."]
+                sentences.extend(re.split(REGEX_EXP, text))
         else:
             continue
         embeddings = search_model.encode(sentences).tolist()
@@ -417,7 +422,8 @@ def handler(event, context):
                     "user": user,
                     "channel": channel or "N/A",
                     "url": url,
-                    "text": extract_snippet(sentences, i)
+                    "text": extract_snippet(sentences, i),
+                    "type": filetype
 
                 }), range(len(sentences)))
             for ids_vectors_chunk in chunks(upsert_data_generator, batch_size=100):

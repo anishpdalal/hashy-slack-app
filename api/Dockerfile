@@ -25,10 +25,12 @@ RUN mkdir -p /function
 COPY ./requirements.txt /function/requirements.txt
 RUN python3 -m pip install pip --upgrade
 RUN python3 -m pip install --no-cache-dir --upgrade -r /function/requirements.txt
+RUN python3 -m pip install --no-cache-dir torch-scatter -f https://data.pyg.org/whl/torch-1.10.0+cpu.html
 
 COPY app.py /function
 RUN mkdir -p /mnt/data
 COPY data /mnt/data
+COPY table_qa /mnt/table_qa
 WORKDIR /function
 ENTRYPOINT [ "python3", "-m", "awslambdaric" ]
 CMD [ "app.handler" ]

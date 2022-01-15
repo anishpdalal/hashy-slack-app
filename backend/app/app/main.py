@@ -183,13 +183,19 @@ def answer_query(event, query):
         "query": query,
         "channel": channel
     }))
-    response = requests.post(
-        f"{os.environ['API_URL']}/search",
-        data=json.dumps({"team": team, "query": query, "user": user, "channel": channel, "count": 10})
-    ).json()
+
+    if "|" in query:
+        response = requests.post(
+            f"{os.environ['API_URL']}/tabular-search",
+            data=json.dumps({"team": team, "query": query, "user": user, "channel": channel, "count": 10})
+        ).json()
+    else:
+        response = requests.post(
+            f"{os.environ['API_URL']}/search",
+            data=json.dumps({"team": team, "query": query, "user": user, "channel": channel, "count": 10})
+        ).json()
 
     blocks = []
-
     if response.get("summary"):
         blocks.append({
 			"type": "header",
@@ -204,14 +210,14 @@ def answer_query(event, query):
                 "type": "section",
                 "text": {
                     "type": "plain_text",
-                    "text": response["summary"],
+                    "text": str(response["summary"]),
                     "emoji": True
                 }
             }
         )
         blocks.append({"type": "divider"})
 
-    if len(response["answers"]) > 0:
+    if len(response.get("answers", [])) > 0:
         blocks.append({
 			"type": "header",
 			"text": {
@@ -221,7 +227,7 @@ def answer_query(event, query):
 			}
 		})
     
-    for idx, result in enumerate(response["answers"]):
+    for idx, result in enumerate(response.get("answers", [])):
         if idx != 0:
             blocks.append({"type": "divider"})
         source = result.get("source","")
@@ -249,7 +255,7 @@ def answer_query(event, query):
             }
         )
     
-    if len(response["search_results"]) > 0:
+    if len(response.get("search_results", [])) > 0:
         blocks.append({
 			"type": "header",
 			"text": {
@@ -260,7 +266,7 @@ def answer_query(event, query):
 		})
     
 
-    for idx, result in enumerate(response["search_results"]):
+    for idx, result in enumerate(response.get("search_results", [])):
         if idx != 0:
             blocks.append({"type": "divider"})
         source = result.get("source","")
@@ -688,10 +694,20 @@ async def google_picker(token, team, user, id, key):
 
             function createPicker() {
                 if (pickerApiLoaded && oauthToken) {
-                    var DisplayView = new google.picker.DocsView().setMimeTypes("application/vnd.google-apps.document,application/pdf,text/plain").setIncludeFolders(true);
+                    var DisplayView = new google.picker.DocsView().
+                        setMimeTypes("application/vnd.google-apps.document,application/pdf,text/plain,application/vnd.google-apps.spreadsheet").
+                        setIncludeFolders(true).
+                        setMode(google.picker.DocsViewMode.LIST)
+                    var ShareView = new google.picker.DocsView().
+                        setMimeTypes("application/vnd.google-apps.document,application/pdf,text/plain,application/vnd.google-apps.spreadsheet").
+                        setIncludeFolders(true).
+                        setMode(google.picker.DocsViewMode.LIST).
+                        setEnableDrives(true)
                     var picker = new google.picker.PickerBuilder().
                         enableFeature(google.picker.Feature.MULTISELECT_ENABLED).
+                        enableFeature(google.picker.Feature.SUPPORT_DRIVES).
                         addView(DisplayView).
+                        addView(ShareView).
                         setAppId(appId).
                         setOAuthToken(oauthToken).
                         setDeveloperKey(developerKey).
