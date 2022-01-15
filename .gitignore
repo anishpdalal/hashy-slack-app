@@ -4,3 +4,4 @@ __pycache__
 *.env
 indexer/data
 api/data
+api/table_qa
