@@ -171,6 +171,17 @@ def handle_message_deleted(event, say):
         raise
     finally:
         db.close()
+    
+
+def parse_summary(summary):
+    if type(summary) == list:
+        results = []
+        results.append("|".join(list(summary[0].keys())))
+        values = ["|".join([str(val) for val in res.values()]) for res in summary]
+        results.extend(values)
+        return "\n".join(results)
+    else:
+        return summary
         
 
 def answer_query(event, query):
@@ -183,13 +194,19 @@ def answer_query(event, query):
         "query": query,
         "channel": channel
     }))
-    response = requests.post(
-        f"{os.environ['API_URL']}/search",
-        data=json.dumps({"team": team, "query": query, "user": user, "channel": channel, "count": 10})
-    ).json()
+    
+    if "|" in query:
+        response = requests.post(
+            f"{os.environ['API_URL']}/tabular-search",
+            data=json.dumps({"team": team, "query": query, "user": user, "channel": channel, "count": 10})
+        ).json()
+    else:
+        response = requests.post(
+            f"{os.environ['API_URL']}/search",
+            data=json.dumps({"team": team, "query": query, "user": user, "channel": channel, "count": 10})
+        ).json()
 
     blocks = []
-
     if response.get("summary"):
         blocks.append({
 			"type": "header",
@@ -204,7 +221,7 @@ def answer_query(event, query):
                 "type": "section",
                 "text": {
                     "type": "plain_text",
-                    "text": response["summary"],
+                    "text": parse_summary(response["summary"]),
                     "emoji": True
                 }
             }
@@ -689,11 +706,11 @@ async def google_picker(token, team, user, id, key):
             function createPicker() {
                 if (pickerApiLoaded && oauthToken) {
                     var DisplayView = new google.picker.DocsView().
-                        setMimeTypes("application/vnd.google-apps.document,application/pdf").
+                        setMimeTypes("application/vnd.google-apps.document,application/pdf,application/vnd.google-apps.spreadsheet").
                         setIncludeFolders(true).
                         setMode(google.picker.DocsViewMode.LIST)
                     var ShareView = new google.picker.DocsView().
-                        setMimeTypes("application/vnd.google-apps.document,application/pdf").
+                        setMimeTypes("application/vnd.google-apps.document,application/pdf,application/vnd.google-apps.spreadsheet").
                         setIncludeFolders(true).
                         setMode(google.picker.DocsViewMode.LIST).
                         setEnableDrives(true)

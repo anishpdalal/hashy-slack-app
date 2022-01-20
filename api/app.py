@@ -1,5 +1,3 @@
-import io
-import itertools
 import json
 import logging
 import os
@@ -10,11 +8,9 @@ from typing import Any
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
 import openai
+import pandas as pd
 import pinecone
-import pdfminer.high_level
-import requests
 from sentence_transformers import SentenceTransformer, util
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 from slack_sdk.web import WebClient
@@ -24,6 +20,7 @@ from sqlalchemy.sql import func
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
 from sqlalchemy_utils import EncryptedType
 from sqlalchemy_utils.types.encrypted.encrypted_type import AesEngine
+import sqlite3
 
 
 logger = logging.getLogger()
@@ -161,275 +158,22 @@ def _get_most_similar_query(db, team, embedding):
     return results
 
 
-def _get_documents(db, team):
-    docs = db.query(Document).filter(Document.team == team).all()
-    return docs
-
-
-def _get_txt_document_text(url, team):
-    bot = installation_store.find_bot(
-        enterprise_id=None,
-        team_id=team,
-    )
-    headers = {
-        "Authorization": f"Bearer {bot.bot_token}",
-        "Content-Type": "text/html"
-    }
-    text = requests.get(url, headers=headers).text
-    return text
-
-
-def _get_pdf_document_text(url, team):
-    bot = installation_store.find_bot(
-        enterprise_id=None,
-        team_id=team,
-    )
-    headers = {
-        "Authorization": f"Bearer {bot.bot_token}",
-    }
-    byte_str = requests.get(url, headers=headers).content
-    pdf_memory_file = io.BytesIO()
-    pdf_memory_file.write(byte_str)
-    text = pdfminer.high_level.extract_text(pdf_memory_file)
-    return text
-
-
-def _get_notion_document_text(file_id, user, channel):
-    db = SessionLocal()
-    try:
-        token = db.query(NotionToken).filter(or_(NotionToken.user_id == user, NotionToken.channel_id == channel)).first()
-        encrypted_token = token.encrypted_token
-        api_url = f"https://api.notion.com/v1/blocks/{file_id}/children"
-        headers = {
-            "Authorization": f"Bearer {encrypted_token}",
-            "Notion-Version": "2021-08-16"
+def _get_k_most_similar_docs(team, embedding, user, channel, k=1, file_type=None):
+    if file_type:
+        filter = {
+            "team": {"$eq": team},
+            "$or": [{"user": {"$eq": user}}, {"channel": {"$eq": channel}}],
+            "type": {"$eq": file_type}
         }
-        params = {}
-        child_blocks = []
-        results = requests.get(api_url, headers=headers).json()
-        child_blocks.extend(results["results"])
-        while results.get("has_more"):
-            params["start_cursor"] = results["next_cursor"]
-            results = requests.get(api_url, params=params).json()
-            child_blocks.extend(results["results"])
-        text = []
-        todos = []
-        for block in child_blocks:
-            if block["type"] == "paragraph":
-                for snippet in block["paragraph"]["text"]:
-                    text.append(snippet["text"]["content"])
-            elif block["type"] == "callout":
-                for snippet in block["callout"]["text"]:
-                    text.append(snippet["text"]["content"])
-            elif block["type"] == "to_do":
-                for snippet in block["to_do"]["text"]:
-                    todos.append(snippet["text"]["content"])
-            elif block["type"] == "bulleted_list_item":
-                for snippet in block["bulleted_list_item"]["text"]:
-                    todos.append(snippet["text"]["content"])
-            elif block["type"] == "numbered_list_item":
-                for snippet in block["numbered_list_item"]["text"]:
-                    todos.append(snippet["text"]["content"])
-            else:
-                pass
-        todos_text = ". ".join(todos)
-        text.append(todos_text)
-        processed_text = " ".join(" ".join(text).encode("ascii", "ignore").decode().strip().split())
-        DOCS[file_id]["allowed_users"].append(token.user_id)
-        if token.channel_id:
-            DOCS[file_id]["allowed_channels"].append(token.channel_id)
-    except:
-        raise
-    finally:
-        db.close()
-    return processed_text
-
-
-def _get_gdrive_pdf_text(file_id, token):
-    creds = Credentials.from_authorized_user_info({
-        "refresh_token": token.encrypted_token,
-        "client_id": os.environ["CLIENT_ID"],
-        "client_secret": os.environ["CLIENT_SECRET"],
-        "scopes": ["https://www.googleapis.com/auth/drive.file"]
-    })
-    creds.refresh(Request())
-    service = build("drive", "v3", credentials=creds)
-    request = service.files().get_media(fileId=file_id)
-    fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while done is False:
-        status, done = downloader.next_chunk()
-    text = pdfminer.high_level.extract_text(fh)
-    return text
-
-
-def _read_paragraph_element(element):
-    """Returns the text in the given ParagraphElement.
-
-        Args:
-            element: a ParagraphElement from a Google Doc.
-    """
-    text_run = element.get('textRun')
-    if not text_run:
-        return ''
-    return text_run.get('content')
-
-
-def _read_strucutural_elements(elements):
-    """Recurses through a list of Structural Elements to read a document's text where text may be
-        in nested elements.
-
-        Args:
-            elements: a list of Structural Elements.
-    """
-    text = ''
-    for value in elements:
-        if 'paragraph' in value:
-            elements = value.get('paragraph').get('elements')
-            for elem in elements:
-                text += _read_paragraph_element(elem)
-        elif 'table' in value:
-            # The text in table cells are in nested Structural Elements and tables may be
-            # nested.
-            table = value.get('table')
-            for row in table.get('tableRows'):
-                cells = row.get('tableCells')
-                for cell in cells:
-                    text += _read_strucutural_elements(cell.get('content'))
-        elif 'tableOfContents' in value:
-            # The text in the TOC is also in a Structural Element.
-            toc = value.get('tableOfContents')
-            text += _read_strucutural_elements(toc.get('content'))
-    return text
-
-
-def _get_google_doc_text(file_id, token):
-    creds = Credentials.from_authorized_user_info({
-        "refresh_token": token.encrypted_token,
-        "client_id": os.environ["CLIENT_ID"],
-        "client_secret": os.environ["CLIENT_SECRET"],
-        "scopes": ["https://www.googleapis.com/auth/drive.file"]
-    })
-    creds.refresh(Request())
-    service = build("docs", "v1", credentials=creds)
-    doc = service.documents().get(documentId=file_id).execute()
-    doc_content = doc.get('body').get('content')
-    text = _read_strucutural_elements(doc_content)
-    return text
-
-
-def _get_gdrive_text(file_id, token):
-    creds = Credentials.from_authorized_user_info({
-        "refresh_token": token.encrypted_token,
-        "client_id": os.environ["CLIENT_ID"],
-        "client_secret": os.environ["CLIENT_SECRET"],
-        "scopes": ["https://www.googleapis.com/auth/drive.file"]
-    })
-    creds.refresh(Request())
-    service = build("drive", "v3", credentials=creds)
-    request = service.files().get_media(fileId=file_id)
-    fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while done is False:
-        status, done = downloader.next_chunk()
-    fh.seek(0)
-    text = fh.read().decode("UTF-8")
-    return text
-
-
-# def _get_k_most_similar_docs(docs, embedding, user, channel, k=1):
-#     if len(docs) == 0:
-#         return
-#     scores = []
-#     doc_idx = []
-#     for idx, obj in enumerate(docs):
-#         res = util.semantic_search(embedding, pickle.loads(obj.embeddings), top_k=k)[0]
-#         scores.append(res)
-#         doc_idx.extend([idx] * len(res))
-#     scores = list(itertools.chain(*scores))
-#     sorted_idx = sorted(range(len(scores)), key=lambda x: scores[x]["score"], reverse=True)
-#     results = []
-#     for idx in sorted_idx[:k]:
-#         score = scores[idx]["score"]
-#         if score >= 0.3:
-#             doc = docs[doc_idx[idx]]
-#             name = doc.name
-#             private_url = doc.url
-#             team = doc.team
-#             file_id = doc.file_id
-#             filetype = doc.type
-#             if file_id in DOCS and ((user in DOCS[file_id]["allowed_users"]) or channel in DOCS[file_id]["allowed_channels"]):
-#                 text = DOCS[file_id]["text"]
-#             else:
-#                 DOCS[file_id] = {"text": None, "allowed_users": [], "allowed_channels": []}
-#                 try:
-#                     if filetype == "notion":
-#                         text = _get_notion_document_text(file_id, user, channel)
-#                         DOCS[file_id]["text"] = text
-#                     elif filetype == "drive#file|application/pdf":
-#                         db = SessionLocal()
-#                         google_token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
-#                         db.close()
-#                         text = _get_gdrive_pdf_text(file_id, google_token)
-#                         DOCS[file_id]["text"] = text
-#                         DOCS[file_id]["allowed_users"].append(google_token.user_id)
-#                         if google_token.channel_id:
-#                             DOCS[file_id]["allowed_channels"].append(google_token.channel_id)
-#                     elif filetype == "drive#file|application/vnd.google-apps.document":
-#                         db = SessionLocal()
-#                         google_token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
-#                         db.close()
-#                         text = _get_google_doc_text(file_id, google_token)
-#                         DOCS[file_id]["text"] = text
-#                         DOCS[file_id]["allowed_users"].append(google_token.user_id)
-#                         if google_token.channel_id:
-#                             DOCS[file_id]["allowed_channels"].append(google_token.channel_id)
-#                     elif filetype == "drive#file|text/plain":
-#                         db = SessionLocal()
-#                         google_token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
-#                         db.close()
-#                         text = _get_gdrive_text(file_id, google_token)
-#                         DOCS[file_id]["text"] = text
-#                         DOCS[file_id]["allowed_users"].append(google_token.user_id)
-#                         if google_token.channel_id:
-#                             DOCS[file_id]["allowed_channels"].append(google_token.channel_id)
-#                     elif name.endswith(".pdf") or name.endswith(".docx"):
-#                         text = _get_pdf_document_text(private_url, team)
-#                         DOCS[file_id]["text"] = text
-#                     else:
-#                         text = _get_txt_document_text(private_url, team)
-#                         DOCS[file_id]["text"] = text
-#                 except:
-#                     continue
-
-
-#             sentences = re.split(REGEX_EXP, text)
-#             corpus_id = scores[idx]["corpus_id"]
-#             if len(sentences) == 1:
-#                 snippet = sentences[corpus_id]
-#             else:
-#                 snippet = " ".join(sentences[corpus_id:corpus_id+2])
-#             snippet_processed = " ".join(snippet.split("\n")).strip()
-#             results.append({
-#                 "source": private_url,
-#                 "name": name,
-#                 "text": None,
-#                 "team": team,
-#                 "last_modified": None,
-#                 "result": snippet_processed
-#             })
-#     return results
-
-def _get_k_most_similar_docs(team, embedding, user, channel, k=1):
+    else:
+        filter = {
+            "team": {"$eq": team},
+            "$or": [{"user": {"$eq": user}}, {"channel": {"$eq": channel}}]
+        }
     query_results = index.query(
         queries=[embedding.tolist()],
         top_k=k,
-        filter={
-            "team": {"$eq": team},
-            "$or": [{"user": {"$eq": user}}, {"channel": {"$eq": channel}}]
-        },
+        filter=filter,
         include_metadata=True
     )
     results = []
@@ -459,6 +203,13 @@ def _get_summary(text):
     summary_text = response.choices[0]["text"].strip()
     summary_text= ".".join(summary_text.split(".")[:-1])
     return summary_text
+
+
+def snake_case(s):
+  return '_'.join(
+    re.sub('([A-Z][a-z]+)', r' \1',
+    re.sub('([A-Z]+)', r' \1',
+    s.replace('-', ' '))).split()).lower()
 
 
 def handler(event, context):
@@ -506,6 +257,108 @@ def handler(event, context):
                 "Content-Type": "application/json"
             }
         }
+    elif path == "/tabular-search":
+        team = body["team"]
+        user = body["user"]
+        channel = body["channel"]
+        results = {
+            "summary": None,
+            "answers": [],
+            "search_results": []
+        }
+        split_query = body["query"].split("|")
+        if len(split_query) != 2:
+            return {
+                "statusCode": 200,
+                "body": json.dumps(results),
+                "headers": {
+                    "Access-Control-Allow-Origin": "*",
+                    "Content-Type": "application/json"
+                }
+            }
+        question = body["query"].split("|")[0]
+        query = body["query"].split("|")[1]
+        query_embedding = search_model.encode([query])
+        k = body.get("count", 1)
+        file_type = "drive#file|application/vnd.google-apps.spreadsheet"
+        results["search_results"] = _get_k_most_similar_docs(team, query_embedding, user, channel, k=k, file_type=file_type)
+        if results["search_results"]:
+            file_url = results["search_results"][0]["source"]
+            db = SessionLocal()
+            token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
+            db.close()
+            creds = Credentials.from_authorized_user_info({
+                "refresh_token": token.encrypted_token,
+                "client_id": os.environ["CLIENT_ID"],
+                "client_secret": os.environ["CLIENT_SECRET"],
+                "scopes": ["https://www.googleapis.com/auth/drive.file"]
+            })
+            creds.refresh(Request())
+            file_id = file_url.split("/")[-1]
+            gsheet = build("sheets", "v4", credentials=creds)
+            rows = gsheet.spreadsheets().values().get(spreadsheetId=file_id, range="A1:Z20000").execute()
+            columns = rows["values"][0]
+            data = []
+            n = len(columns)
+            for row in rows["values"][1:]:
+                data.append(row[0:n])
+            df = pd.DataFrame(data=data, columns=columns)
+            df.columns = [snake_case(x) for x in df.columns]
+            for column in df.columns:
+                try:
+                    df[column] = df[column].replace("", None).apply(lambda x: int(x.replace(",","")))
+                    continue
+                except:
+                    pass
+                try:
+                    df[column] = df[column].replace("", None).apply(lambda x: float(x.replace(",","")))
+                    continue
+                except:
+                    pass
+                try:
+                    df[column] = pd.to_datetime(df[column])
+                    df[column] = df[column].dt.strftime('%Y-%m-%d')
+                    continue
+                except:
+                    pass
+            nunique = df.nunique()
+            cols_to_drop = nunique[nunique == 1].index
+            df.drop(cols_to_drop, axis=1, inplace=True)
+            cnx = sqlite3.connect(':memory:')
+            df.to_sql(name='t', con=cnx)
+            response = openai.Completion.create(
+                engine="davinci-instruct-beta-v3",
+                prompt=f"###Postgres table, with its properties:\n#\n# t({', '.join(df.columns)})\n#\n### A query to {question}\nSELECT",
+                temperature=0.3,
+                max_tokens=100,
+                top_p=1,
+                frequency_penalty=0.5,
+                presence_penalty=0,
+                stop=["#", ";"]
+            )
+            sql = response["choices"][0]["text"].strip(" ").lower()
+            sql_query = f"select {sql}"
+            try:
+                result = pd.read_sql(sql_query, cnx)
+                keys = list(json.loads(result.to_json()).keys())
+                values = list(zip(*[d.values() for d in list(json.loads(result.to_json()).values())]))
+                summary = []
+                for val in values:
+                    tmp = {}
+                    for i in range(len(val)):
+                        tmp[keys[i]] = val[i]
+                    summary.append(tmp)
+                results["summary"] = summary
+            except:
+                pass
+        return {
+            "statusCode": 200,
+            "body": json.dumps(results),
+            "headers": {
+                "Access-Control-Allow-Origin": "*",
+                "Content-Type": "application/json"
+            }
+        }  
     elif path == "/create-answer":
         team = body["team"]
         user = body["user"]
