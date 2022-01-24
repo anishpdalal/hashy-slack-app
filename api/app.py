@@ -327,7 +327,7 @@ def handler(event, context):
             cnx = sqlite3.connect(':memory:')
             df.to_sql(name='t', con=cnx)
             response = openai.Completion.create(
-                engine="davinci-instruct-beta-v3",
+                engine="code-davinci-001",
                 prompt=f"###Postgres table, with its properties:\n#\n# t({', '.join(df.columns)})\n#\n### A query to {question}\nSELECT",
                 temperature=0.3,
                 max_tokens=100,
