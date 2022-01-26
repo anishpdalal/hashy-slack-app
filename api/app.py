@@ -284,6 +284,9 @@ def handler(event, context):
         results["search_results"] = _get_k_most_similar_docs(team, query_embedding, user, channel, k=k, file_type=file_type)
         if results["search_results"]:
             file_url = results["search_results"][0]["source"]
+            result = results["search_results"][0]["result"]
+            title = results["search_results"][0]["name"]
+            sheet_range = result.split(f"{title} - ")[1]
             db = SessionLocal()
             token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
             db.close()
@@ -296,7 +299,7 @@ def handler(event, context):
             creds.refresh(Request())
             file_id = file_url.split("/")[-1]
             gsheet = build("sheets", "v4", credentials=creds)
-            rows = gsheet.spreadsheets().values().get(spreadsheetId=file_id, range="A1:Z20000").execute()
+            rows = gsheet.spreadsheets().values().get(spreadsheetId=file_id, range=sheet_range).execute()
             columns = rows["values"][0]
             data = []
             n = len(columns)
