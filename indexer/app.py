@@ -184,7 +184,7 @@ def _get_gdrive_pdf_text(file_id, token):
     })
     creds.refresh(Request())
     service = build("drive", "v3", credentials=creds)
-    request = service.files().get_media(fileId=file_id)
+    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
     done = False
@@ -249,6 +249,21 @@ def _get_google_doc_text(file_id, token):
     return text
 
 
+def _get_google_sheets_text(file_id, file_name, token):
+    creds = Credentials.from_authorized_user_info({
+        "refresh_token": token.encrypted_token,
+        "client_id": os.environ["CLIENT_ID"],
+        "client_secret": os.environ["CLIENT_SECRET"],
+        "scopes": ["https://www.googleapis.com/auth/drive.file"]
+    })
+    creds.refresh(Request())
+    gsheet = build("sheets", "v4", credentials=creds)
+    sheets = gsheet.spreadsheets().get(spreadsheetId=file_id, fields='sheets/properties').execute()
+    ranges = [f"{file_name} - {sheet['properties']['title']}" for sheet in sheets['sheets']]
+    text = ". ".join(ranges)
+    return text
+
+
 def _get_gdrive_text(file_id, token):
     creds = Credentials.from_authorized_user_info({
         "refresh_token": token.encrypted_token,
@@ -258,7 +273,7 @@ def _get_gdrive_text(file_id, token):
     })
     creds.refresh(Request())
     service = build("drive", "v3", credentials=creds)
-    request = service.files().get_media(fileId=file_id)
+    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
     done = False
@@ -278,8 +293,10 @@ def chunks(iterable, batch_size=100):
         chunk = tuple(itertools.islice(it, batch_size))
 
 
-def extract_snippet(sentences, idx):
+def extract_snippet(sentences, filetype, idx):
     if len(sentences) == 1:
+        snippet = sentences[idx]
+    elif filetype == "drive#file|application/vnd.google-apps.spreadsheet":
         snippet = sentences[idx]
     else:
         snippet = " ".join(sentences[idx: idx+2])
@@ -374,6 +391,11 @@ def handler(event, context):
             google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
             db.close()
             text = _get_google_doc_text(file_id, google_token)
+        elif filetype == "drive#file|application/vnd.google-apps.spreadsheet":
+            db = SessionLocal()
+            google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
+            db.close()
+            text = _get_google_sheets_text(file_id, file_name, google_token)
         elif filetype == "drive#file|text/plain":
             db = SessionLocal()
             google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
@@ -382,8 +404,11 @@ def handler(event, context):
         else:
             continue
         if type(text) == str and len(text) > 0:
-            sentences = [f"{file_name}."]
-            sentences.extend(re.split(REGEX_EXP, text))
+            if filetype == "drive#file|application/vnd.google-apps.spreadsheet":
+                sentences = re.split(REGEX_EXP, text)
+            else:
+                sentences = [f"{file_name}."]
+                sentences.extend(re.split(REGEX_EXP, text))
         else:
             continue
         embeddings = search_model.encode(sentences).tolist()
@@ -417,7 +442,8 @@ def handler(event, context):
                     "user": user,
                     "channel": channel or "N/A",
                     "url": url,
-                    "text": extract_snippet(sentences, i)
+                    "text": extract_snippet(sentences, filetype, i),
+                    "type": filetype or mimetype
 
                 }), range(len(sentences)))
             for ids_vectors_chunk in chunks(upsert_data_generator, batch_size=100):
