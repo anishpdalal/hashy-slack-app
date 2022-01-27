@@ -286,7 +286,7 @@ def handler(event, context):
             file_url = results["search_results"][0]["source"]
             result = results["search_results"][0]["result"]
             title = results["search_results"][0]["name"]
-            sheet_range = result.split(f"{title} - ")[1]
+            sheet_range = result.split(f"{title} - ")[1].strip(".")
             db = SessionLocal()
             token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
             db.close()
@@ -321,6 +321,11 @@ def handler(event, context):
                 try:
                     df[column] = pd.to_datetime(df[column])
                     df[column] = df[column].dt.strftime('%Y-%m-%d')
+                    continue
+                except:
+                    pass
+                try:
+                    df[column] = df[column].str.lower()
                     continue
                 except:
                     pass
