@@ -304,7 +304,8 @@ def handler(event, context):
             data = []
             n = len(columns)
             for row in rows["values"][1:]:
-                data.append(row[0:n])
+                data_row = row[0:n] + [None] * (n - len(row))    
+                data.append(data_row)
             df = pd.DataFrame(data=data, columns=columns)
             df.columns = [snake_case(x) for x in df.columns]
             for column in df.columns:
@@ -329,6 +330,7 @@ def handler(event, context):
                     continue
                 except:
                     pass
+            df = df.loc[:,~df.columns.duplicated()].copy()
             nunique = df.nunique()
             cols_to_drop = nunique[nunique == 1].index
             df.drop(cols_to_drop, axis=1, inplace=True)
@@ -337,10 +339,10 @@ def handler(event, context):
             response = openai.Completion.create(
                 engine="code-davinci-001",
                 prompt=f"###Postgres table, with its properties:\n#\n# t({', '.join(df.columns)})\n#\n### A query to {question}\nSELECT",
-                temperature=0.3,
+                temperature=0,
                 max_tokens=100,
                 top_p=1,
-                frequency_penalty=0.5,
+                frequency_penalty=0,
                 presence_penalty=0,
                 stop=["#", ";"]
             )
