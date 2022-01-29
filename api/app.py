@@ -212,6 +212,15 @@ def snake_case(s):
     s.replace('-', ' '))).split()).lower()
 
 
+def search(regex: str, df, case=False):
+    textlikes = df.select_dtypes(include=[object, "string"])
+    return df[
+        textlikes.apply(
+            lambda column: column.str.contains(regex, regex=True, case=case, na=False)
+        ).any(axis=1)
+    ]
+
+
 def handler(event, context):
     path = event["path"]
     body = json.loads(event["body"]) if event.get("body") else {}
@@ -308,6 +317,7 @@ def handler(event, context):
                 data.append(data_row)
             df = pd.DataFrame(data=data, columns=columns)
             df.columns = [snake_case(x) for x in df.columns]
+            df = df.loc[:,~df.columns.duplicated()].copy()
             for column in df.columns:
                 try:
                     df[column] = df[column].replace("", None).apply(lambda x: int(x.replace(",","")))
@@ -330,7 +340,6 @@ def handler(event, context):
                     continue
                 except:
                     pass
-            df = df.loc[:,~df.columns.duplicated()].copy()
             nunique = df.nunique()
             cols_to_drop = nunique[nunique == 1].index
             df.drop(cols_to_drop, axis=1, inplace=True)
@@ -348,19 +357,34 @@ def handler(event, context):
             )
             sql = response["choices"][0]["text"].strip(" ").lower()
             sql_query = f"select {sql}"
+            filters = re.findall(r"'(.*?)'", sql_query, re.DOTALL)
             try:
                 result = pd.read_sql(sql_query, cnx)
-                keys = list(json.loads(result.to_json()).keys())
-                values = list(zip(*[d.values() for d in list(json.loads(result.to_json()).values())]))
-                summary = []
-                for val in values:
-                    tmp = {}
-                    for i in range(len(val)):
-                        tmp[keys[i]] = val[i]
-                    summary.append(tmp)
-                results["summary"] = summary
+                if len(result) == 0:
+                    filtered_df = df
+                    for filter in filters:
+                        tmp_df = search(filter, filtered_df)
+                        if len(tmp_df) > 0:
+                            filtered_df = tmp_df
+                        result = filtered_df
             except:
-                pass
+                filtered_df = df
+                for filter in filters:
+                    tmp_df = search(filter, filtered_df)
+                    if len(tmp_df) > 0:
+                        filtered_df = tmp_df
+                result = filtered_df
+        if len(result) == len(df):
+            result = pd.DataFrame(columns=df.columns, data=[])
+        keys = list(json.loads(result.to_json()).keys())
+        values = list(zip(*[d.values() for d in list(json.loads(result.to_json()).values())]))
+        summary = []
+        for val in values:
+            tmp = {}
+            for i in range(len(val)):
+                tmp[keys[i]] = val[i]
+            summary.append(tmp)
+        results["summary"] = summary
         return {
             "statusCode": 200,
             "body": json.dumps(results),
