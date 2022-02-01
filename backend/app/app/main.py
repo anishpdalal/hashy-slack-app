@@ -176,10 +176,10 @@ def handle_message_deleted(event, say):
 def parse_summary(summary):
     if type(summary) == list:
         results = []
-        results.append("|".join(list(summary[0].keys())))
-        values = ["|".join([str(val) for val in res.values()]) for res in summary]
+        results.append(" | ".join(list(summary[0].keys())))
+        values = [" | ".join([str(val) for val in res.values()]) for res in summary]
         results.extend(values)
-        return "\n".join(results)
+        return "\n".join(results)[0:3000]
     else:
         return summary
         
@@ -366,7 +366,14 @@ def help_command(ack, respond, command, client):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"To search, enter `/hashy <your query here>`"
+                        "text": f"To search documents, enter `/hashy <your query here>`"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"To search spreadsheets, enter `/hashy <your query here> | <name of spreadsheet/sub-sheet>`"
                     }
                 },
                 {
