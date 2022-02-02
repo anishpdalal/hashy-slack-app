@@ -190,10 +190,19 @@ def _get_k_most_similar_docs(team, embedding, user, channel, k=1, file_type=None
             })
     return results
 
-def _get_summary(text):
+def _get_summary(text, query):
+    # response = openai.Completion.create(
+    #     engine="curie-instruct-beta-v2",
+    #     prompt=f"{text}\n\ntl;dr:",
+    #     temperature=0,
+    #     max_tokens=32,
+    #     top_p=1,
+    #     frequency_penalty=0,
+    #     presence_penalty=0
+    # )
     response = openai.Completion.create(
-        engine="curie-instruct-beta-v2",
-        prompt=f"{text}\n\ntl;dr:",
+        engine="text-davinci-001",
+        prompt=f"{text}\n\nAnswer the following question\n{query}",
         temperature=0,
         max_tokens=32,
         top_p=1,
@@ -201,7 +210,8 @@ def _get_summary(text):
         presence_penalty=0
     )
     summary_text = response.choices[0]["text"].strip()
-    summary_text= ".".join(summary_text.split(".")[:-1])
+    if "." in summary_text:
+        summary_text= ".".join(summary_text.split(".")[:-1])
     return summary_text
 
 
@@ -249,8 +259,8 @@ def handler(event, context):
             results["answers"] = _get_most_similar_query(db, team, query_embedding)
             k = body.get("count", 1)
             results["search_results"] = _get_k_most_similar_docs(team, query_embedding, user, channel, k=k)
-            if results["search_results"]:
-                results["summary"] = _get_summary(results["search_results"][0]["result"])
+            if results["search_results"] and query.strip().endswith("?"):
+                results["summary"] = _get_summary(results["search_results"][0]["result"], query)
             else:
                 results["summary"] = None
         except:
