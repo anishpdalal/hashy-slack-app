@@ -212,7 +212,7 @@ def answer_query(event, query):
 			"type": "header",
 			"text": {
 				"type": "plain_text",
-				"text": f"Summary",
+				"text": f"Answer",
 				"emoji": True
 			}
 		})
@@ -340,7 +340,13 @@ def handle_view_events(ack, body, client, view):
     else:
         google_redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
         google_client_id = os.environ["GOOGLE_CLIENT_ID"]
-        msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}-{target_channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
+        db = database.SessionLocal()
+        token = crud.get_google_token(db, user)
+        db.close()
+        if not token or not token.encrypted_token:
+            msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&prompt=consent&include_granted_scopes=true&response_type=code&state={user}-{team}-{target_channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
+        else:
+            msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}-{target_channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
     ack()
     client.chat_postMessage(channel=channel, text=msg)
 
@@ -373,7 +379,7 @@ def help_command(ack, respond, command, client):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"To search spreadsheets, enter `/hashy <your query here> | <name of spreadsheet/sub-sheet>`"
+                        "text": f"To search google spreadsheets, enter `/hashy <your query here> | <name of sheet name and/or tab name>`. For example `/hashy find the customer with the most revenue in Feb 2015 | 2015 Sales`"
                     }
                 },
                 {
@@ -758,6 +764,7 @@ async def google_picker(token, team, user, id, key):
         </head>
         <body>
             <div style="width:15%; margin-top: 10%;">
+                <p style="color:black;"><b>Current Files formats supported: PDF, Google Doc, Google Sheet</b></p>
                 <p style="color:black;"><b>Select All Files: Shift + a</b></p>
                 <p style="color:black;"><b>Clear All Selections: Shift + n</b></p>
                 <p style="color:black;"><b>Select/Unselect Individual Files: Hold Ctl/Cmd + click</b></p>
