@@ -1,3 +1,4 @@
+import difflib
 import json
 import logging
 import os
@@ -191,18 +192,11 @@ def _get_k_most_similar_docs(team, embedding, user, channel, k=1, file_type=None
     return results
 
 def _get_summary(text, query):
-    # response = openai.Completion.create(
-    #     engine="curie-instruct-beta-v2",
-    #     prompt=f"{text}\n\ntl;dr:",
-    #     temperature=0,
-    #     max_tokens=32,
-    #     top_p=1,
-    #     frequency_penalty=0,
-    #     presence_penalty=0
-    # )
+    if not query.endswith("?"):
+        query = f"{query}?"
     response = openai.Completion.create(
         engine="text-davinci-001",
-        prompt=f"{text}\n\nAnswer the following question\n{query}",
+        prompt=f"Below is a prompt\n\n{text}\n\nIf the answer is unknown, say \"Unknown\"\n\nBased on the provided prompt, answer the question {query}",
         temperature=0,
         max_tokens=32,
         top_p=1,
@@ -229,6 +223,12 @@ def search(regex: str, df, case=False):
             lambda column: column.str.contains(regex, regex=True, case=case, na=False)
         ).any(axis=1)
     ]
+
+
+def get_overlap(s1, s2):
+    s = difflib.SequenceMatcher(None, s1, s2)
+    pos_a, pos_b, size = s.find_longest_match(0, len(s1), 0, len(s2)) 
+    return s1[pos_a:pos_a+size]
 
 
 def handler(event, context):
@@ -259,7 +259,7 @@ def handler(event, context):
             results["answers"] = _get_most_similar_query(db, team, query_embedding)
             k = body.get("count", 1)
             results["search_results"] = _get_k_most_similar_docs(team, query_embedding, user, channel, k=k)
-            if results["search_results"] and query.strip().endswith("?"):
+            if results["search_results"]:
                 results["summary"] = _get_summary(results["search_results"][0]["result"], query)
             else:
                 results["summary"] = None
@@ -394,6 +394,18 @@ def handler(event, context):
             for i in range(len(val)):
                 tmp[keys[i]] = val[i]
             summary.append(tmp)
+        if len(summary) == 0:
+            try:
+                question_mod = question.replace("?","").lower()
+                candidates = {q.strip() for q in question_mod.split(" ")}
+                for val in rows["values"]:
+                    striped = " ".join(val).lower().strip()
+                    overlap = get_overlap(striped, question_mod).strip()
+                    if overlap in candidates or any(item in overlap for item in candidates):
+                        summary.append([i for i in val if i])
+                summary = "\n".join([" | ".join(row) for row in summary])[0:3000]
+            except:
+                pass
         results["summary"] = summary
         return {
             "statusCode": 200,
