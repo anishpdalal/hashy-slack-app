@@ -208,25 +208,26 @@ def answer_query(event, query):
 
     blocks = []
     if response.get("summary"):
-        blocks.append({
-			"type": "header",
-			"text": {
-				"type": "plain_text",
-				"text": f"Answer",
-				"emoji": True
-			}
-		})
-        blocks.append(
-            {
-                "type": "section",
+        if response["summary"] != "Unknown":
+            blocks.append({
+                "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": parse_summary(response["summary"]),
+                    "text": f"Answer",
                     "emoji": True
                 }
-            }
-        )
-        blocks.append({"type": "divider"})
+            })
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "plain_text",
+                        "text": parse_summary(response["summary"]),
+                        "emoji": True
+                    }
+                }
+            )
+            blocks.append({"type": "divider"})
 
     if len(response["answers"]) > 0:
         blocks.append({
