@@ -334,20 +334,30 @@ def handle_view_events(ack, body, client, view):
     integration, channel = integration.split("-")
     user = body["user"]["id"]
     team = body["team"]["id"]
+    channel_name = client.conversations_info(channel=target_channel)["channel"]["name"]
+    db = database.SessionLocal()
     if integration.startswith("notion"):
-        notion_id = os.environ["NOTION_CLIENT_ID"]
-        redirect_uri = os.environ["NOTION_REDIRECT_URI"]
-        msg = f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{target_channel}|Click Here to integrate with Notion>"
+        token = crud.get_notion_token_by_channel(db, target_channel)
+        if token and token.user_id != user:
+            user_name = client.users_info(user=token.user_id)["user"]["name"]
+            msg = f"A notion integration already exists for channel {channel_name} created by {user_name}. Please integrate with another channel."
+        else:
+            notion_id = os.environ["NOTION_CLIENT_ID"]
+            redirect_uri = os.environ["NOTION_REDIRECT_URI"]
+            msg = f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{target_channel}|Click Here to integrate with Notion>"
     else:
+        google_channel_token = crud.get_google_token_by_channel(db, target_channel)
         google_redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
         google_client_id = os.environ["GOOGLE_CLIENT_ID"]
-        db = database.SessionLocal()
         token = crud.get_google_token(db, user)
-        db.close()
-        if not token or not token.encrypted_token:
+        if google_channel_token and google_channel_token.user_id != user:
+            user_name = client.users_info(user=google_channel_token.user_id)["user"]["name"]
+            msg = f"A google drive integration already exists for channel {channel_name} created by {user_name}. Please integrate with another channel."
+        elif not token or not token.encrypted_token:
             msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&prompt=consent&include_granted_scopes=true&response_type=code&state={user}-{team}-{target_channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
         else:
             msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}-{target_channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
+    db.close()
     ack()
     client.chat_postMessage(channel=channel, text=msg)
 
@@ -462,7 +472,10 @@ def help_command(ack, respond, command, client):
                         "text": "Select a channel",
                         "emoji": True
                     },
-                    "action_id": "target_channel_select"
+                    "action_id": "target_channel_select",
+                    "filter": {
+                        "include": ["private", "public"]
+                    }
                 },
                 "label": {
                     "type": "plain_text",
