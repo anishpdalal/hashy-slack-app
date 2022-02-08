@@ -88,12 +88,22 @@ def get_notion_token(db: Session, user_id: str):
     return token
 
 
+def get_notion_token_by_channel(db: Session, channel_id: str):
+    token = db.query(models.NotionToken).filter(models.NotionToken.channel_id == channel_id).first()
+    return token
+
+
 def update_notion_token(db:Session, id: int, fields: Dict[str, Any]):
     db.query(models.NotionToken).filter_by(id=id).update(fields)
 
 
 def get_google_token(db: Session, user_id: str):
     token = db.query(models.GoogleToken).filter(models.GoogleToken.user_id == user_id).first()
+    return token
+
+
+def get_google_token_by_channel(db: Session, channel_id: str):
+    token = db.query(models.GoogleToken).filter(models.GoogleToken.channel_id == channel_id).first()
     return token
 
 
