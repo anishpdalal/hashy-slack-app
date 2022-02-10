@@ -105,8 +105,37 @@ def save_answer(ack, body, client):
         "team": team,
         "user": user,
         "text": text,
-        "result": result
+        "result": result,
+        "channel": channel,
     }
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Query: {text}"
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Loading Results..."
+            }
+        },
+    ]
+    client.views_update(
+        view_id=view_id,
+        view={
+            "type": "modal",
+            "title": {
+                "type": "plain_text",
+                "text": f"Results",
+                "emoji": True
+            },
+            "blocks": blocks
+        }
+    )
     requests.post(
         f"{os.environ['API_URL']}/create-answer",
         data=json.dumps(query)
@@ -131,7 +160,8 @@ def save_answer(ack, body, client):
             "type": "input",
             "element": {
                 "type": "plain_text_input",
-                "action_id": "save_answer"
+                "action_id": "save_answer",
+                "multiline": True,
             },
             "label": {
                 "type": "plain_text",
@@ -152,6 +182,16 @@ def save_answer(ack, body, client):
             "blocks": blocks
         }
     )
+
+
+@app.action("ask_teammate")
+def handle_ask_teammate(ack, body, client):
+    ack()
+    query = [block["text"]["text"].split("Query: ")[1] for block in body["view"]["blocks"] if "Query:" in block.get("text", {}).get("text", "")][0]
+    user_name = body["user"]["name"]
+    selection = body["actions"][0]["selected_conversation"]
+    msg = f"{user_name} has requested your help. Please enter `/hashy {query}` and provide an answer to the query. Thanks!"
+    client.chat_postMessage(channel=selection, text=msg)
 
 
 @app.event({
@@ -564,11 +604,31 @@ def help_command(ack, respond, command, client):
                 "type": "input",
                 "element": {
                     "type": "plain_text_input",
-                    "action_id": "save_answer"
+                    "action_id": "save_answer",
+                    "multiline": True,
                 },
                 "label": {
                     "type": "plain_text",
                     "text": f"Have an answer you'd like to contribute? Save it here:",
+                    "emoji": True
+                }
+            },
+            {
+                "block_id": "ask_teammate",
+                "dispatch_action": True,
+                "type": "input",
+                "element": {
+                    "type": "conversations_select",
+                    "placeholder": {
+                        "type": "plain_text",
+                        "text": "Select a teammate or channel",
+                        "emoji": True
+                    },
+                    "action_id": "ask_teammate",
+                },
+                "label": {
+                    "type": "plain_text",
+                    "text": "Think somebody else can provide a great answer? Ask a teammate to contribute.",
                     "emoji": True
                 }
             }

@@ -1,4 +1,5 @@
 import os
+import uuid
 
 from sqlalchemy import Column, Integer, PickleType, String, Text, DateTime
 from sqlalchemy.sql import func
@@ -11,12 +12,10 @@ from .base_class import Base
 
 class Query(Base):
     id = Column(Integer, primary_key=True, index=True)
+    query_id = Column(String)
     team = Column(String, nullable=False)
-    text = Column(Text, nullable=False)
     user = Column(String, nullable=False)
-    embedding = Column(PickleType, nullable=False)
-    result = Column(Text, nullable=False)
-    evidence = Column(Text, nullable=True)
+    channel = Column(String)
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
