@@ -1,3 +1,4 @@
+from datetime import date, datetime
 import difflib
 import json
 import logging
@@ -5,6 +6,7 @@ import os
 import pickle
 import re
 from typing import Any
+import uuid
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -66,12 +68,10 @@ class Base:
 
 class Query(Base):
     id = Column(Integer, primary_key=True, index=True)
+    query_id = Column(String)
     team = Column(String, nullable=False)
-    text = Column(Text, nullable=False)
     user = Column(String, nullable=False)
-    embedding = Column(PickleType, nullable=False)
-    result = Column(Text, nullable=False)
-    evidence = Column(Text, nullable=True)
+    channel = Column(String)
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -124,37 +124,27 @@ def _get_queries(db, team):
     return queries
 
 
-def _get_most_similar_query(db, team, embedding):
-    bot = installation_store.find_bot(
-        enterprise_id=None,
-        team_id=team,
+def _get_most_similar_query(team, embedding):
+    filter = {
+        "team": {"$eq": team},
+        "type": {"$eq": "answer"}
+    }
+    query_results = index.query(
+        queries=[embedding.tolist()],
+        top_k=10,
+        filter=filter,
+        include_metadata=True
     )
-    queries = _get_queries(db, team)
-    if len(queries) == 0:
-        return []
-    scores = [
-        util.semantic_search(embedding, pickle.loads(obj.embedding), top_k=1)[0][0] for obj in queries
-    ]
     results = []
-    sorted_idx = sorted(range(len(scores)), key=lambda x: scores[x]["score"], reverse=True)
-    for idx in sorted_idx:
-        score = scores[idx]["score"]
-        if score >= 0.4:
-            obj = queries[idx]
-            user = obj.user
-            client = WebClient(token=bot.bot_token)
-            result = client.users_info(
-                user=user
-            )
-            user_name = result['user']['name']
-            last_modified = obj.time_updated if obj.time_updated else obj.time_created
+    matches = query_results["results"][0]["matches"]
+    for match in matches:
+        if match["score"] >= 0.4:
             results.append({
-                "name": user_name,
+                "name": match["metadata"]["name"],
                 "team": team,
-                "text": obj.text,
-                "source": obj.evidence,
-                "last_modified": f"{last_modified.month}/{last_modified.day}/{last_modified.year}",
-                "result": obj.result
+                "text": match["metadata"]["text"],
+                "last_modified": match["metadata"]["last_modified"].strftime("%m/%d/%Y"),
+                "result": match["metadata"]["result"]
             })
     return results
 
@@ -169,7 +159,8 @@ def _get_k_most_similar_docs(team, embedding, user, channel, k=1, file_type=None
     else:
         filter = {
             "team": {"$eq": team},
-            "$or": [{"user": {"$eq": user}}, {"channel": {"$eq": channel}}]
+            "$or": [{"user": {"$eq": user}}, {"channel": {"$eq": channel}}],
+            "type": {"$ne": "answer"}
         }
     query_results = index.query(
         queries=[embedding.tolist()],
@@ -234,6 +225,7 @@ def get_overlap(s1, s2):
 def handler(event, context):
     path = event["path"]
     body = json.loads(event["body"]) if event.get("body") else {}
+    logger.info(body)
     if path == "/ping":
         return {
             "statusCode": 200,
@@ -256,7 +248,7 @@ def handler(event, context):
         db = SessionLocal()
         try:
             query_embedding = search_model.encode([query])
-            results["answers"] = _get_most_similar_query(db, team, query_embedding)
+            results["answers"] = _get_most_similar_query(team, query_embedding)
             k = body.get("count", 1)
             results["search_results"] = _get_k_most_similar_docs(team, query_embedding, user, channel, k=k)
             if results["search_results"]:
@@ -419,16 +411,15 @@ def handler(event, context):
         team = body["team"]
         user = body["user"]
         text = body["text"]
-        text_embedding = search_model.encode([text])
-        evidence = body.get("evidence", None)
+        channel = body["channel"]
         result = body["result"]
+        text_embedding = search_model.encode([text]).tolist()
+        query_id = str(uuid.uuid4())
         query = Query(**{
                 "team": team,
                 "user": user,
-                "text": text,
-                "embedding": pickle.dumps(text_embedding),
-                "evidence": evidence,
-                "result": result
+                "channel": channel,
+                "query_id": query_id
             }
         )
         db = SessionLocal()
@@ -436,6 +427,29 @@ def handler(event, context):
             db.add(query)
             db.commit()
             db.refresh(query)
+            bot = installation_store.find_bot(
+                enterprise_id=None,
+                team_id=team,
+            )
+            client = WebClient(token=bot.bot_token)
+            user_name = client.users_info(user=user)['user']['name']
+            last_modified = datetime.now().strftime("%m/%d/%Y")
+            index.upsert(vectors=zip(
+                [query_id],
+                text_embedding,
+                [
+                    {
+                        "user": user,
+                        "team": team,
+                        "channel": channel or "N/A",
+                        "text": text,
+                        "result": result,
+                        "type": "answer",
+                        "name": user_name,
+                        "last_modified": last_modified
+                    }
+                ]
+            ))
         except:
             db.rollback()
             raise
