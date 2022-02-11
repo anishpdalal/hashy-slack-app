@@ -1,3 +1,4 @@
+from asyncio import log
 import base64
 import itertools
 import json
@@ -37,8 +38,6 @@ app_handler = SlackRequestHandler(app)
 
 sqs = boto3.resource("sqs", region_name="us-east-1")
 queue = sqs.get_queue_by_name(QueueName=os.getenv("SQS_QUEUE_NAME"))
-
-view_channel_map = {}
 
 
 @app.event("file_created")
@@ -92,107 +91,35 @@ def handle_message_file_share(event, say):
         queue.send_message(MessageBody=json.dumps(message))
 
 
-@app.action("save_answer")
-def save_answer(ack, body, client):
+@app.view("submit_answer_view")
+def handle_submit_answer_view(ack, body, client, view):
     ack()
-    view_id = body["container"]["view_id"]
-    team = body["team"]["id"]
     user = body["user"]["id"]
-    channel = view_channel_map.get(view_id)
-    text = [block["text"]["text"].split("Query: ")[1] for block in body["view"]["blocks"] if "Query:" in block.get("text", {}).get("text", "")][0]
-    result = body["actions"][0]["value"]
-    query = {
-        "team": team,
-        "user": user,
-        "text": text,
-        "result": result,
-        "channel": channel,
-    }
-    blocks = [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"Query: {text}"
-            }
-        },
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"Loading Results..."
-            }
-        },
-    ]
-    client.views_update(
-        view_id=view_id,
-        view={
-            "type": "modal",
-            "title": {
-                "type": "plain_text",
-                "text": f"Results",
-                "emoji": True
-            },
-            "blocks": blocks
-        }
-    )
-    requests.post(
-        f"{os.environ['API_URL']}/create-answer",
-        data=json.dumps(query)
-    )
-    blocks = [{
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": f"Query: {text}"
-        }
-    }]
-    event = {
-        "team": team,
-        "user": user,
-        "channel": channel
-    }
-    result_blocks = answer_query(event, text)
-    blocks.extend(result_blocks)
-    blocks.extend([
-        {
-            "dispatch_action": True,
-            "type": "input",
-            "element": {
-                "type": "plain_text_input",
-                "action_id": "save_answer",
-                "multiline": True,
-            },
-            "label": {
-                "type": "plain_text",
-                "text": f"Have an answer you'd like to contribute? Save it here:",
-                "emoji": True
-            }
-        }
-    ])
-    client.views_update(
-        view_id=view_id,
-        view={
-            "type": "modal",
-            "title": {
-                "type": "plain_text",
-                "text": "Results",
-                "emoji": True
-            },
-            "blocks": blocks
-        }
-    )
-
-
-@app.action("ask_teammate")
-def handle_ask_teammate(ack, body, client):
-    ack()
-    query = [block["text"]["text"].split("Query: ")[1] for block in body["view"]["blocks"] if "Query:" in block.get("text", {}).get("text", "")][0]
     user_name = body["user"]["name"]
-    selection = body["actions"][0]["selected_conversation"]
-    msg = f"{user_name} has requested your help. Please enter `/hashy {query}` and provide an answer to the query. Thanks!"
-    client.chat_postMessage(channel=selection, text=msg)
-
+    team = body["team"]["id"]
+    channel = body["view"]["private_metadata"]
+    text = [block["text"]["text"].split("Query: ")[1] for block in body["view"]["blocks"] if "Query:" in block.get("text", {}).get("text", "")][0]
+    answer = view["state"]["values"]["save_answer"]["save_answer"]["value"]
+    selected_conversations = view["state"]["values"]["ask_teammate"]["ask_teammate"]["selected_conversations"]
+    if answer:
+        query = {
+            "team": team,
+            "user": user,
+            "text": text,
+            "result": answer,
+            "channel": channel,
+        }
+        requests.post(
+            f"{os.environ['API_URL']}/create-answer",
+            data=json.dumps(query)
+        )
+    for id in selected_conversations:
+        msg = f"{user_name} has requested your help. Please enter `/hashy {text}` and provide an answer to the query. Thanks!"
+        try:
+            client.chat_postMessage(channel=id, text=msg)
+        except:
+            pass
+    
 
 @app.event({
     "type": "message",
@@ -600,8 +527,9 @@ def help_command(ack, respond, command, client):
         blocks.extend(result_blocks)
         blocks.extend([
             {
-                "dispatch_action": True,
+                "block_id": "save_answer",
                 "type": "input",
+                "optional": True,
                 "element": {
                     "type": "plain_text_input",
                     "action_id": "save_answer",
@@ -615,36 +543,48 @@ def help_command(ack, respond, command, client):
             },
             {
                 "block_id": "ask_teammate",
-                "dispatch_action": True,
                 "type": "input",
+                "optional": True,
                 "element": {
-                    "type": "conversations_select",
+                    "type": "multi_conversations_select",
                     "placeholder": {
                         "type": "plain_text",
-                        "text": "Select a teammate or channel",
+                        "text": "Select teammates and/or channels",
                         "emoji": True
                     },
                     "action_id": "ask_teammate",
                 },
                 "label": {
                     "type": "plain_text",
-                    "text": "Think somebody else can provide a great answer? Ask a teammate to contribute.",
+                    "text": "Think somebody else can provide a great answer? Ask teammates to contribute.",
                     "emoji": True
                 }
             }
         ])
-        view_channel_map[response["view"]["id"]] = channel
         client.views_update(
             hash=response["view"]["hash"],
             view_id=response["view"]["id"],
             view={
+                "callback_id": "submit_answer_view",
                 "type": "modal",
                 "title": {
                     "type": "plain_text",
                     "text": "Results",
                     "emoji": True
                 },
-                "blocks": blocks
+                "blocks": blocks,
+                "private_metadata": channel,
+                "submit": {
+                    "type": "plain_text",
+                    "text": "Submit",
+                    "emoji": True
+                },
+                "close": {
+                    "type": "plain_text",
+                    "text": "Close",
+                    "emoji": True
+                },
+                "clear_on_close": True
             }
         )
 
