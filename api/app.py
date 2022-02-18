@@ -1,9 +1,8 @@
-from datetime import date, datetime
+from datetime import datetime
 import difflib
 import json
 import logging
 import os
-import pickle
 import re
 from typing import Any
 import uuid
@@ -14,10 +13,10 @@ from googleapiclient.discovery import build
 import openai
 import pandas as pd
 import pinecone
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import SentenceTransformer
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 from slack_sdk.web import WebClient
-from sqlalchemy import create_engine, Column, Integer, PickleType, String, Text, DateTime, or_
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, or_
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
@@ -78,36 +77,6 @@ class Query(Base):
     time_updated = Column(DateTime(timezone=True), onupdate=func.now())
 
 
-class Document(Base):
-    id = Column(Integer, primary_key=True, index=True)
-    team = Column(String, nullable=False)
-    user = Column(String, nullable=False)
-    file_id = Column(String, nullable=False)
-    name = Column(String, nullable=False)
-    type = Column(String)
-    url = Column(String, nullable=False)
-    embeddings = Column(PickleType)
-    num_vectors = Column(Integer)
-    time_created = Column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    time_updated = Column(DateTime(timezone=True), onupdate=func.now())
-
-
-class NotionToken(Base):
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String, nullable=False)
-    team = Column(String, nullable=False)
-    notion_user_id = Column(String, nullable=False)
-    encrypted_token = Column(EncryptedType(String, os.environ["TOKEN_SEC_KEY"], AesEngine, "pkcs5"))
-    time_created = Column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    bot_id = Column(String, nullable=False)
-    workspace_id = Column(String, nullable=False)
-    channel_id = Column(String)
-
-
 class GoogleToken(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, nullable=False)
@@ -117,11 +86,6 @@ class GoogleToken(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     channel_id = Column(String)
-
-
-def _get_queries(db, team):
-    queries = db.query(Query).filter(Query.team == team).all()
-    return queries
 
 
 def _get_most_similar_query(team, embedding):
@@ -149,17 +113,15 @@ def _get_most_similar_query(team, embedding):
     return results
 
 
-def _get_k_most_similar_docs(team, embedding, user, channel, k=1, file_type=None):
+def _get_k_most_similar_docs(team, embedding, k=1, file_type=None):
     if file_type:
         filter = {
             "team": {"$eq": team},
-            "$or": [{"user": {"$eq": user}}, {"channel": {"$eq": channel}}],
             "type": {"$eq": file_type}
         }
     else:
         filter = {
             "team": {"$eq": team},
-            "$or": [{"user": {"$eq": user}}, {"channel": {"$eq": channel}}],
             "type": {"$ne": "answer"}
         }
     query_results = index.query(
@@ -238,7 +200,6 @@ def handler(event, context):
     elif path == "/search":
         team = body["team"]
         user = body["user"]
-        channel = body["channel"]
         query = body["query"]
         results = {
             "summary": None,
@@ -250,7 +211,7 @@ def handler(event, context):
             query_embedding = search_model.encode([query])
             results["answers"] = _get_most_similar_query(team, query_embedding)
             k = body.get("count", 1)
-            results["search_results"] = _get_k_most_similar_docs(team, query_embedding, user, channel, k=k)
+            results["search_results"] = _get_k_most_similar_docs(team, query_embedding, k=k)
             if results["search_results"]:
                 results["summary"] = _get_summary(results["search_results"][0]["result"], query)
             else:
@@ -271,7 +232,6 @@ def handler(event, context):
     elif path == "/tabular-search":
         team = body["team"]
         user = body["user"]
-        channel = body["channel"]
         results = {
             "summary": None,
             "answers": [],
@@ -292,14 +252,14 @@ def handler(event, context):
         query_embedding = search_model.encode([query])
         k = body.get("count", 1)
         file_type = "drive#file|application/vnd.google-apps.spreadsheet"
-        results["search_results"] = _get_k_most_similar_docs(team, query_embedding, user, channel, k=k, file_type=file_type)
+        results["search_results"] = _get_k_most_similar_docs(team, query_embedding, k=k, file_type=file_type)
         if results["search_results"]:
             file_url = results["search_results"][0]["source"]
             result = results["search_results"][0]["result"]
             title = results["search_results"][0]["name"]
             sheet_range = result.split(f"{title} - ")[1].strip(".")
             db = SessionLocal()
-            token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user, GoogleToken.channel_id == channel)).first()
+            token = db.query(GoogleToken).filter(or_(GoogleToken.user_id == user)).first()
             db.close()
             creds = Credentials.from_authorized_user_info({
                 "refresh_token": token.encrypted_token,
@@ -411,14 +371,12 @@ def handler(event, context):
         team = body["team"]
         user = body["user"]
         text = body["text"]
-        channel = body["channel"]
         result = body["result"]
         text_embedding = search_model.encode([text]).tolist()
         query_id = str(uuid.uuid4())
         query = Query(**{
                 "team": team,
                 "user": user,
-                "channel": channel,
                 "query_id": query_id
             }
         )
@@ -441,7 +399,6 @@ def handler(event, context):
                     {
                         "user": user,
                         "team": team,
-                        "channel": channel or "N/A",
                         "text": text,
                         "result": result,
                         "type": "answer",

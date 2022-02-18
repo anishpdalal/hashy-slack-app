@@ -32,6 +32,7 @@ class DocumentBase(BaseModel):
     embeddings: bytes
     url: str
     user: str
+    users: Optional[List[str]]
     file_id: str
 
 
@@ -87,4 +88,3 @@ class GooglePickerUpload(BaseModel):
     team: str
     user: str
     token: str
-    channel: str

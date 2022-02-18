@@ -2,6 +2,7 @@ import os
 import uuid
 
 from sqlalchemy import Column, Integer, PickleType, String, Text, DateTime
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.sql import func
 from sqlalchemy_utils import EncryptedType
 from sqlalchemy_utils.types.encrypted.encrypted_type import AesEngine
@@ -25,7 +26,8 @@ class Query(Base):
 class Document(Base):
     id = Column(Integer, primary_key=True, index=True)
     team = Column(String, nullable=False)
-    user = Column(String, nullable=False)
+    user = Column(String)
+    users = Column(ARRAY(String))
     file_id = Column(String, nullable=False)
     name = Column(String, nullable=False)
     type = Column(String)

@@ -150,7 +150,6 @@ def handler(event, context):
                 page = {
                     "team": token.team,
                     "user": token.user_id,
-                    "channel": token.channel_id,
                     "url": url,
                     "filetype": "notion",
                     "file_name": file_name,
