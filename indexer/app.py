@@ -13,9 +13,9 @@ from googleapiclient.http import MediaIoBaseDownload
 import pinecone
 import pdfminer.high_level
 import requests
-from slack_sdk.web import WebClient
 from sentence_transformers import SentenceTransformer
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy import create_engine, Column, Integer, PickleType, String, Text, DateTime
 from sqlalchemy.sql import func
 from sqlalchemy.ext.declarative import as_declarative, declared_attr
@@ -51,7 +51,8 @@ class Base:
 class Document(Base):
     id = Column(Integer, primary_key=True, index=True)
     team = Column(String, nullable=False)
-    user = Column(String, nullable=False)
+    user = Column(String)
+    users = Column(ARRAY(String))
     file_id = Column(String, nullable=False)
     name = Column(String, nullable=False)
     type = Column(String)
@@ -325,16 +326,13 @@ def handler(event, context):
         if payload.get("type") == "delete":
             file_id = payload["file_id"]
             try:
+                user = payload["user"]
                 db = SessionLocal()
                 doc = db.query(Document).filter(Document.file_id == file_id).first()
-                user = doc.user
-                num_vectors = doc.num_vectors
-                db.query(Document).filter(Document.file_id == file_id).delete()
-                if num_vectors:
-                    delete_data_generator = map(lambda i: f"{user}-{file_id}-{i}", range(num_vectors))
-                    for ids_chunk in chunks(delete_data_generator, batch_size=100):
-                        index.delete(ids=list(ids_chunk))
-                db.commit()
+                if doc and user in doc.users:
+                    doc.users.remove(user)
+                    db.query(Document).filter_by(file_id=doc.file_id).update({"users": doc.users})
+                    db.commit()
             except Exception as e:
                 logger.error(e)
                 raise
@@ -346,7 +344,6 @@ def handler(event, context):
         url = payload["url"]
         team = payload["team"]
         user = payload["user"]
-        channel = payload.get("channel")
         file_id = payload["file_id"]
         filetype = payload["filetype"]
         mimetype = payload.get("mimetype")
@@ -416,7 +413,7 @@ def handler(event, context):
         fields = {
             "team": team,
             "name": file_name,
-            "user": user,
+            "users": [user],
             "url": url,
             "num_vectors": len(sentences),
             "file_id": file_id,
@@ -426,7 +423,13 @@ def handler(event, context):
             doc = db.query(Document).filter(Document.file_id == file_id).first()
             prev_num_vectors = doc.num_vectors if doc and doc.num_vectors else 0
             if doc:
-                db.query(Document).filter_by(id=doc.id).update(fields)
+                doc_users = set(doc.users)
+                doc_users.add(user)
+                update_fields = {
+                    "users": list(doc_users),
+                    "num_vectors": len(sentences)
+                }
+                db.query(Document).filter_by(id=doc.id).update(update_fields)
                 db.commit()
             else:
                 doc = Document(**fields)
@@ -434,13 +437,11 @@ def handler(event, context):
                 db.commit()
                 db.refresh(doc)
             upsert_data_generator = map(lambda i: (
-                f"{user}-{file_id}-{i}",
+                f"{team}-{file_id}-{i}",
                 embeddings[i],
                 {
                     "title": file_name,
                     "team": team,
-                    "user": user,
-                    "channel": channel or "N/A",
                     "url": url,
                     "text": extract_snippet(sentences, filetype, i),
                     "type": filetype or mimetype
@@ -450,7 +451,7 @@ def handler(event, context):
                 index.upsert(vectors=ids_vectors_chunk)
             logger.info(f"Prev Number of Vectors: {prev_num_vectors}, Len Sentences: {len(sentences)}")
             if prev_num_vectors > len(sentences):
-                delete_data_generator = map(lambda i: f"{user}-{file_id}-{i}", range(len(sentences), prev_num_vectors))
+                delete_data_generator = map(lambda i: f"{team}-{file_id}-{i}", range(len(sentences), prev_num_vectors))
                 for ids_chunk in chunks(delete_data_generator, batch_size=100):
                     logger.info(list(ids_chunk))
                     index.delete(ids=list(ids_chunk))

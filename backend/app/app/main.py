@@ -14,7 +14,6 @@ from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
 from slack_bolt.oauth.oauth_settings import OAuthSettings
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
-from slack_sdk.web import WebClient
 
 from app.db import crud, database, schemas
 
@@ -62,10 +61,17 @@ def handle_file_created_events(client, event, say):
 
 @app.event({
     "type": "message",
+    "subtype": "message_deleted"
+})
+def handle_message_deleted(event, say):
+    pass
+
+
+@app.event({
+    "type": "message",
     "subtype": "file_share"
 })
 def handle_message_file_share(event, say):
-    channel = event["channel"]
     for file in event["files"]:
         mimetype = file["mimetype"]
         filetype = file["filetype"]
@@ -76,7 +82,6 @@ def handle_message_file_share(event, say):
         file_name = file["name"]
         team = url.split("/")[4].split("-")[0]
         message = {
-            "channel": channel,
             "mimetype": mimetype,
             "filetype": filetype,
             "file_id": file_id,
@@ -97,7 +102,6 @@ def handle_submit_answer_view(ack, body, client, view):
     user = body["user"]["id"]
     user_name = body["user"]["name"]
     team = body["team"]["id"]
-    channel = body["view"]["private_metadata"]
     text = [block["text"]["text"].split("Query: ")[1] for block in body["view"]["blocks"] if "Query:" in block.get("text", {}).get("text", "")][0]
     answer = view["state"]["values"]["save_answer"]["save_answer"]["value"]
     selected_conversations = view["state"]["values"]["ask_teammate"]["ask_teammate"]["selected_conversations"]
@@ -106,8 +110,7 @@ def handle_submit_answer_view(ack, body, client, view):
             "team": team,
             "user": user,
             "text": text,
-            "result": answer,
-            "channel": channel,
+            "result": answer
         }
         requests.post(
             f"{os.environ['API_URL']}/create-answer",
@@ -119,25 +122,6 @@ def handle_submit_answer_view(ack, body, client, view):
             client.chat_postMessage(channel=id, text=msg)
         except:
             pass
-    
-
-@app.event({
-    "type": "message",
-    "subtype": "message_deleted"
-})
-def handle_message_deleted(event, say):
-    file_id = event["previous_message"]["files"][0]["id"]
-    db = database.SessionLocal()
-    try:
-        doc = crud.get_document(db, file_id)
-        if doc is not None:
-            crud.delete_document(db, file_id)
-        db.commit()
-    except:
-        db.rollback()
-        raise
-    finally:
-        db.close()
     
 
 def parse_summary(summary):
@@ -154,23 +138,21 @@ def parse_summary(summary):
 def answer_query(event, query):
     team = event["team"]
     user = event["user"]
-    channel = event["channel"]
     logger.info(json.dumps({
         "user": user,
         "team": team,
-        "query": query,
-        "channel": channel
+        "query": query
     }))
     
     if "|" in query:
         response = requests.post(
             f"{os.environ['API_URL']}/tabular-search",
-            data=json.dumps({"team": team, "query": query, "user": user, "channel": channel, "count": 10})
+            data=json.dumps({"team": team, "query": query, "user": user, "count": 10})
         ).json()
     else:
         response = requests.post(
             f"{os.environ['API_URL']}/search",
-            data=json.dumps({"team": team, "query": query, "user": user, "channel": channel, "count": 10})
+            data=json.dumps({"team": team, "query": query, "user": user, "count": 10})
         ).json()
 
     blocks = []
@@ -201,7 +183,7 @@ def answer_query(event, query):
 			"type": "header",
 			"text": {
 				"type": "plain_text",
-				"text": f"Team Answers ({len(response['answers'])})",
+				"text": f"Team Answers",
 				"emoji": True
 			}
 		})
@@ -239,16 +221,21 @@ def answer_query(event, query):
 			"type": "header",
 			"text": {
 				"type": "plain_text",
-				"text": f"Search Results ({len(response['search_results'])})",
+				"text": f"Search Results",
 				"emoji": True
 			}
 		})
     
-
+    sources = list(set([res.get("source") for res in response["search_results"]]))
+    db = database.SessionLocal()
+    doc_user_mapping = crud.get_documents(db, sources)
+    db.close()
     for idx, result in enumerate(response["search_results"]):
+        source = result.get("source","")
+        if user not in doc_user_mapping.get(source, []):
+            continue
         if idx != 0:
             blocks.append({"type": "divider"})
-        source = result.get("source","")
         name = result.get("name")
         result_text = result["result"]
         last_modified = result.get("last_modified", "")
@@ -278,52 +265,35 @@ def answer_query(event, query):
 
 @app.event("app_mention")
 def handle_mentions(event, say):
-    query = event["text"].split("> ")[1]
-    if query is not None:
-        say(f"Paste in `/hashy {query}`")
+    pass
 
 
 @app.event("message")
 def handle_message(event, say):
-    channel_type = event.get("channel_type")
-    query = event.get("text")
-    if query is not None and channel_type == "im":
-        say(f"Paste in `/hashy {query}`")
+    pass
 
 SCOPE = 'https://www.googleapis.com/auth/drive.file'
-
 
 
 @app.view("integration_view")
 def handle_view_events(ack, body, client, view):
     integration = view["state"]["values"]["target_integration"]["target_integration_select"]["selected_option"]["value"]
-    target_channel = view["state"]["values"]["target_channel"]["target_channel_select"]["selected_conversation"]
     integration, channel = integration.split("-")
     user = body["user"]["id"]
     team = body["team"]["id"]
-    channel_name = client.conversations_info(channel=target_channel)["channel"]["name"]
     db = database.SessionLocal()
     if integration.startswith("notion"):
-        token = crud.get_notion_token_by_channel(db, target_channel)
-        if token and token.user_id != user:
-            user_name = client.users_info(user=token.user_id)["user"]["name"]
-            msg = f"A notion integration already exists for channel {channel_name} created by {user_name}. Please integrate with another channel."
-        else:
-            notion_id = os.environ["NOTION_CLIENT_ID"]
-            redirect_uri = os.environ["NOTION_REDIRECT_URI"]
-            msg = f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}-{target_channel}|Click Here to integrate with Notion>"
+        notion_id = os.environ["NOTION_CLIENT_ID"]
+        redirect_uri = os.environ["NOTION_REDIRECT_URI"]
+        msg = f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}|Click Here to integrate with Notion>"
     else:
-        google_channel_token = crud.get_google_token_by_channel(db, target_channel)
         google_redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
         google_client_id = os.environ["GOOGLE_CLIENT_ID"]
         token = crud.get_google_token(db, user)
-        if google_channel_token and google_channel_token.user_id != user:
-            user_name = client.users_info(user=google_channel_token.user_id)["user"]["name"]
-            msg = f"A google drive integration already exists for channel {channel_name} created by {user_name}. Please integrate with another channel."
-        elif not token or not token.encrypted_token:
-            msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&prompt=consent&include_granted_scopes=true&response_type=code&state={user}-{team}-{target_channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
+        if not token or not token.encrypted_token:
+            msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&prompt=consent&include_granted_scopes=true&response_type=code&state={user}-{team}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
         else:
-            msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}-{target_channel}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
+            msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
     db.close()
     ack()
     client.chat_postMessage(channel=channel, text=msg)
@@ -386,13 +356,6 @@ def help_command(ack, respond, command, client):
     elif command_text == "integrate":
         blocks = [
             {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "An integration can only be linked to one channel at a time. *Only share documents with your integration whose information you want viewed by members of the channel.*"
-                }
-		    },
-            {
                 "block_id": "target_integration",
                 "type": "input",
                 "element": {
@@ -427,29 +390,7 @@ def help_command(ack, respond, command, client):
                     "text": "Choose document source",
                     "emoji": True
                 }
-		    },
-            {
-                "block_id": "target_channel",
-                "dispatch_action": False,
-                "type": "input",
-                "element": {
-                    "type": "conversations_select",
-                    "placeholder": {
-                        "type": "plain_text",
-                        "text": "Select a channel",
-                        "emoji": True
-                    },
-                    "action_id": "target_channel_select",
-                    "filter": {
-                        "include": ["private", "public"]
-                    }
-                },
-                "label": {
-                    "type": "plain_text",
-                    "text": "Select a channel to share documents with (Make sure Hashy is invited to the channel first)",
-                    "emoji": True
-                }
-            }
+		    }
 	    ]
         response = client.views_open(
             trigger_id=command["trigger_id"],
@@ -647,7 +588,7 @@ async def oauth_redirect(req: Request):
 
 @api.get("/google/oauth_redirect")
 async def google_authorize(req: Request, state):
-    user_id, team_id, channel_id = state.split("-")
+    user_id, team_id = state.split("-")
     config = {
         "web":{
             "client_id": os.environ["GOOGLE_CLIENT_ID"],
@@ -675,21 +616,18 @@ async def google_authorize(req: Request, state):
             fields = {
                 "user_id": user_id,
                 "team": team_id,
-                "encrypted_token": credentials.refresh_token,
-                "channel_id": channel_id
+                "encrypted_token": credentials.refresh_token
             }
             token = crud.create_google_token(fields)
             db.add(token)
             db.commit()
             db.refresh(token)
         else:
-            fields = {
-                "channel_id": channel_id
-            }
             if credentials.refresh_token is not None:
+                fields = {}
                 fields["encrypted_token"] = credentials.refresh_token
-            crud.update_google_token(db, token.id, fields)
-            db.commit()
+                crud.update_google_token(db, token.id, fields)
+                db.commit()
     except:
         db.rollback()
         raise
@@ -697,7 +635,7 @@ async def google_authorize(req: Request, state):
         db.close()
     app_id = os.environ["GOOGLE_APP_ID"]
     key = os.environ["GOOGLE_API_KEY"]
-    response = RedirectResponse(f"/google-picker/{credentials.token}?team={team_id}&user={user_id}&id={app_id}&key={key}&channel={channel_id}")
+    response = RedirectResponse(f"/google-picker/{credentials.token}?team={team_id}&user={user_id}&id={app_id}&key={key}")
     return response
 
 
@@ -718,7 +656,6 @@ async def google_picker(token, team, user, id, key):
             var team = urlParams.get("team");
             var user = urlParams.get("user");
             var appId = urlParams.get("id");
-            var channel = urlParams.get("channel");
 
             function loadPicker() {
                 gapi.load('picker', {'callback': onPickerApiLoad});
@@ -748,7 +685,7 @@ async def google_picker(token, team, user, id, key):
                         setOAuthToken(oauthToken).
                         setDeveloperKey(developerKey).
                         setCallback(pickerCallback).
-                        setTitle("Selected files will be included in the search index - Unselected files will be removed from the index").
+                        setTitle("Selected files to search").
                         build().
                         setVisible(true);
                 }
@@ -768,8 +705,8 @@ async def google_picker(token, team, user, id, key):
                     var theUrl = `https://${window.location.hostname}/google/process-documents`;
                     xmlhttp.open("POST", theUrl);
                     xmlhttp.setRequestHeader("Content-Type", "application/json");
-                    xmlhttp.send(JSON.stringify({"team": team, "user": user, "channel": channel, "token": oauthToken, files: files}));
-                    window.location.assign(`https://app.slack.com/client/${team}`);
+                    xmlhttp.send(JSON.stringify({"team": team, "user": user, "token": oauthToken, files: files}));
+                    loadPicker();
                 }
             }
             </script>
@@ -803,12 +740,10 @@ def chunks(iterable, batch_size=10):
 def process_google_documents(upload: schemas.GooglePickerUpload):
     user_id = upload.user
     team_id = upload.team
-    channel_id = upload.channel
     db = database.SessionLocal()
     current_docs = crud.get_gdrive_documents(db, user_id)
     db.close()
     current_file_ids = set([doc.file_id for doc in current_docs])
-    uploaded_file_ids = set([file["file_id"] for file in upload.files])
     files_to_upload = [
         {
             "Id": file["file_id"],
@@ -816,7 +751,6 @@ def process_google_documents(upload: schemas.GooglePickerUpload):
                 {
                     "team": team_id,
                     "user": user_id,
-                    "channel": channel_id,
                     "url": f"https://drive.google.com/file/d/{file['file_id']}",
                     "filetype": f"drive#file|{file['mime_type']}",
                     "file_name": file["file_name"],
@@ -826,24 +760,6 @@ def process_google_documents(upload: schemas.GooglePickerUpload):
         } for file in upload.files if file["file_id"] not in current_file_ids
     ]
     for files_chunk in chunks(files_to_upload, batch_size=10):
-        queue.send_messages(Entries=files_chunk)
-    
-    files_to_delete = [
-        {
-            "Id": file_id,
-            "MessageBody": json.dumps(
-                {
-                    "team": team_id,
-                    "user": user_id,
-                    "file_id": file_id,
-                    "num_vectors": crud.get_document(db, file_id).num_vectors,
-                    "type": "delete"
-                }
-            )
-        } for file_id in current_file_ids - uploaded_file_ids
-    ]
-
-    for files_chunk in chunks(files_to_delete, batch_size=10):
         queue.send_messages(Entries=files_chunk)
 
 
@@ -870,7 +786,7 @@ async def notion_oauth_redirect(code, state):
     token_response = token_response.json()
     db = database.SessionLocal()
     try:
-        user_id, team_id, channel_id = state.split("-")
+        user_id, team_id = state.split("-")
         notion_user_id = token_response["owner"]["user"]["id"]
         access_token = token_response["access_token"]
         bot_id = token_response["bot_id"]
@@ -881,8 +797,7 @@ async def notion_oauth_redirect(code, state):
             "notion_user_id": notion_user_id,
             "encrypted_token": access_token,
             "bot_id": bot_id,
-            "workspace_id": workspace_id,
-            "channel_id": channel_id
+            "workspace_id": workspace_id
         }
         token = crud.get_notion_token(db, user_id)
         if token:

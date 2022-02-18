@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from sqlalchemy.orm import load_only, Session
 from sqlalchemy.sql.expression import update
@@ -53,6 +53,11 @@ def get_gdrive_documents(db: Session, user: str):
 def get_document(db: Session, file_id: str):
     doc = db.query(models.Document).filter(models.Document.file_id == file_id).first()
     return doc
+
+
+def get_documents(db: Session, urls: List[str]):
+    docs = db.query(models.Document).filter(models.Document.url.in_(urls)).all()
+    return {doc.url: doc.users for doc in docs}
 
 
 def update_document(db:Session, id: int, fields: Dict[str, Any]):
