@@ -116,13 +116,18 @@ def handle_submit_answer_view(ack, body, client, view):
             f"{os.environ['API_URL']}/create-answer",
             data=json.dumps(query)
         )
+    db = database.SessionLocal()
     for id in selected_conversations:
-        msg = f"{user_name} has requested your help. Please enter `/hashy {text}` and provide an answer to the query. Thanks!"
+        logged_user = crud.get_logged_user(db, id)
+        if logged_user:
+            msg = f"{user_name} has requested your help. Please enter `/hashy {text}` and provide an answer to the question. Thanks!"
+        else:
+            msg = f"{user_name} has requested your help. Please install the Hashy Slack app and enter `/hashy {text}` to provide an answer to the question. Thanks!"
         try:
             client.chat_postMessage(channel=id, text=msg)
         except:
             pass
-    
+    db.close()
 
 def parse_summary(summary):
     if type(summary) == list:
@@ -313,21 +318,14 @@ def help_command(ack, respond, command, client):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"To create or modify an integration, enter `/hashy integrate`"
+                        "text": f"To setup an integration, enter `/hashy integrate`"
                     }
                 },
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"To search documents, enter `/hashy <your query here>`"
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"To search google spreadsheets, enter `/hashy <your query here> | <name of sheet name and/or tab name>`. For example `/hashy find the customer with the most revenue in Feb 2015 | 2015 Sales`"
+                        "text": f"To search, enter `/hashy <your query here>`"
                     }
                 },
                 {
@@ -555,12 +553,17 @@ def handle_app_home_opened(client, event, say):
             db.add(user)
             db.commit()
             db.refresh(user)
-            say(f"Hi, <@{result['user']['name']}>  :wave:\n\n"
-                "<https://www.loom.com/share/82dbc6777d59420a933c720ccbe7347e?sharedAppSource=personal_library|Here's a walk through of Hashy>\n\n"
-                f"1. Identify a channel you want to share your documents with and add hashy to it\n\n"
-                f"2. Setup an integration with the command `/hashy integrate`\n\n"
-                f"3. Search with the command `/hashy <your query here>`\n\n"
-                "Type in `/hashy help` to view these commands\n\n"
+            say(f":wave: Hi <@{result['user']['name']}>, Welcome to the Hashy app on Slack! Hashy lets you quickly find and share knowledge across your org.\n"
+                "Here's how to get started :point_down:\n\n"
+                f"1. Think of a question you get asked all the time. Type in `/hashy <your question here>` and enter your answer\n"
+                "Users tend to answer with written explanations or links to documents/videos/web pages.\n\n"
+                f"2. Congrats! Your team can get your answer from Hashy rather than directly asking you all the time :smile:.\n"
+                "The next time someone asks the same query, they'll see the answer you provided. Go ahead and try it out!\n\n"
+                f"3. Now think of an important question that someone else knows how to answer. Type in `/hashy <your question here>`\n"
+                "and select the coworker to ask the question to. The coworker will be prompted to enter an answer.\n"
+                "This is how Hashy seamlessly captures knowledge across teams.\n\n"
+                "4. Hashy also integrates with your existing documents to search through text relevant to your query.\n"
+                "Enter `/hashy help` to learn how to setup integrations and also watch an overview of Hashy."
             )
     except:
         db.rollback()
@@ -740,10 +743,6 @@ def chunks(iterable, batch_size=10):
 def process_google_documents(upload: schemas.GooglePickerUpload):
     user_id = upload.user
     team_id = upload.team
-    db = database.SessionLocal()
-    current_docs = crud.get_gdrive_documents(db, user_id)
-    db.close()
-    current_file_ids = set([doc.file_id for doc in current_docs])
     files_to_upload = [
         {
             "Id": file["file_id"],
@@ -757,7 +756,7 @@ def process_google_documents(upload: schemas.GooglePickerUpload):
                     "file_id": file["file_id"]
                 }
             )
-        } for file in upload.files if file["file_id"] not in current_file_ids
+        } for file in upload.files
     ]
     for files_chunk in chunks(files_to_upload, batch_size=10):
         queue.send_messages(Entries=files_chunk)
