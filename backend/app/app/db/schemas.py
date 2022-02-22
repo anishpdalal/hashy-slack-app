@@ -68,7 +68,6 @@ class LoggedUser(LoggedUserBase):
 class NotionTokenBase(BaseModel):
     user_id: str
     team: str
-    channel_id: str
     notion_user_id: str
     encrypted_token: str
     bot_id: str
