@@ -457,7 +457,7 @@ def help_command(ack, respond, command, client):
             {
                 "text": {
                     "type": "plain_text",
-                    "text": res["answer"],
+                    "text": res["answer"][0:70],
                     "emoji": True
                 },
                 "value": res["query_id"]
