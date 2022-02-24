@@ -14,6 +14,7 @@ from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
 from slack_bolt.oauth.oauth_settings import OAuthSettings
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
+from slack_sdk.web import WebClient
 
 from app.db import crud, database, schemas
 
@@ -116,6 +117,10 @@ def handle_submit_answer_view(ack, body, client, view):
             f"{os.environ['API_URL']}/create-answer",
             data=json.dumps(query)
         )
+        client.chat_postMessage(
+            channel=user,
+            text="Successfully contributed an answer!"
+        )
     db = database.SessionLocal()
     for id in selected_conversations:
         logged_user = crud.get_logged_user(db, id)
@@ -139,6 +144,11 @@ def handle_delete_answer_view(ack, body, client, view):
     requests.post(
         f"{os.environ['API_URL']}/delete-answers",
         data=json.dumps({"team": team, "user": user, "query_ids": query_ids})
+    )
+    msg = "answers" if len(query_ids) > 1 else "answer"
+    client.chat_postMessage(
+        channel=user,
+        text=f"Successfully deleted {len(query_ids)} {msg}!"
     )
 
 
@@ -338,7 +348,14 @@ def help_command(ack, respond, command, client):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"To search, enter `/hashy <your query here>`"
+                        "text": f"To search or contribute answer to query, enter `/hashy <your query here>`"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"To delete an answer, enter `/hashy delete`"
                     }
                 },
                 {
@@ -507,7 +524,8 @@ def help_command(ack, respond, command, client):
                         "type": "plain_text",
                         "text": "Delete Answers",
                         "emoji": True
-                    }
+                    },
+                    "clear_on_close": True
                 }
             )
     else:
@@ -852,6 +870,15 @@ def process_google_documents(upload: schemas.GooglePickerUpload):
     ]
     for files_chunk in chunks(files_to_upload, batch_size=10):
         queue.send_messages(Entries=files_chunk)
+    bot = installation_store.find_bot(
+        enterprise_id=None,
+        team_id=team_id,
+    )
+    client = WebClient(token=bot.bot_token)
+    client.chat_postMessage(
+        channel=user_id,
+        text="Integrating google drive documents"
+    )
 
 
 @api.get("/notion/oauth_redirect")
@@ -912,6 +939,14 @@ async def notion_oauth_redirect(code, state):
         InvocationType="Event",
         Payload=json.dumps(payload)
     )
-
+    bot = installation_store.find_bot(
+        enterprise_id=None,
+        team_id=team_id,
+    )
+    client = WebClient(token=bot.bot_token)
+    client.chat_postMessage(
+        channel=user_id,
+        text="Integrating notion documents. It may take up to a few hours to complete processing."
+    )
     response = RedirectResponse(f"https://app.slack.com/client/{team_id}")
     return response
