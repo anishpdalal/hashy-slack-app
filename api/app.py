@@ -420,7 +420,49 @@ def handler(event, context):
                 "Content-Type": "application/json"
             }
         }
-
+    elif path == "/list-answers":
+        team = body["team"]
+        user = body["user"]
+        db = SessionLocal()
+        queries = db.query(Query).filter(Query.user == user, Query.team == team).all()
+        db.close()
+        query_ids = [q.query_id for q in queries]
+        results = []
+        if query_ids:
+            vectors = index.fetch(query_ids)["vectors"]
+            for query in queries:
+                if query.query_id in vectors:
+                    results.append({
+                        "query_id": query.query_id,
+                        "question": vectors.get(query.query_id)["metadata"]["text"],
+                        "answer": vectors.get(query.query_id)["metadata"]["result"]
+                    })
+        return {
+            "statusCode": 200,
+            "body": json.dumps(results),
+            "headers": {
+                "Access-Control-Allow-Origin": "*",
+                "Content-Type": "application/json"
+            }
+        }
+    elif path == "/delete-answers":
+        team = body["team"]
+        user = body["user"]
+        db = SessionLocal()
+        query_ids = body["query_ids"]
+        for query_id in query_ids:
+            db.query(Query).filter(Query.user == user, Query.team == team, Query.query_id == query_id).delete()
+        db.commit()
+        index.delete(ids=query_ids)
+        db.close()
+        return {
+            "statusCode": 200,
+            "body": "success",
+            "headers": {
+                "Access-Control-Allow-Origin": "*",
+                "Content-Type": "application/json"
+            }
+        }
     else:
         return {
             "statusCode": 200,

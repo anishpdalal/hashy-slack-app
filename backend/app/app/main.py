@@ -129,6 +129,19 @@ def handle_submit_answer_view(ack, body, client, view):
             pass
     db.close()
 
+
+@app.view("delete_answer_view")
+def handle_delete_answer_view(ack, body, client, view):
+    ack()
+    query_ids = [opt["value"] for opt in view["state"]["values"]["delete_answers"]["delete_answers"]["selected_options"]]
+    team = body["team"]["id"]
+    user = body["user"]["id"]
+    requests.post(
+        f"{os.environ['API_URL']}/delete-answers",
+        data=json.dumps({"team": team, "user": user, "query_ids": query_ids})
+    )
+
+
 def parse_summary(summary):
     if type(summary) == list:
         results = []
@@ -418,6 +431,85 @@ def help_command(ack, respond, command, client):
                 }
             }
         )
+    elif command_text == "delete":
+        response = requests.post(
+            f"{os.environ['API_URL']}/list-answers",
+            data=json.dumps({"team": team, "user": user})
+        ).json()
+        options = [
+            {
+                "text": {
+                    "type": "plain_text",
+                    "text": res["answer"],
+                    "emoji": True
+                },
+                "value": res["query_id"]
+            } for res in response
+        ]
+        if len(options) > 0:
+            client.views_open(
+                trigger_id=command["trigger_id"],
+                view={
+                    "callback_id": "delete_answer_view",
+                    "type": "modal",
+                    "blocks": [{
+                        "block_id": "delete_answers",
+                        "type": "input",
+                        "element": {
+                            "type": "multi_static_select",
+                            "placeholder": {
+                                "type": "plain_text",
+                                "text": "Select answers",
+                                "emoji": True
+                            },
+                            "options": options,
+                            "action_id": "delete_answers",
+                        },
+                        "label": {
+                            "type": "plain_text",
+                            "text": "Select answers to delete",
+                            "emoji": True
+                        }
+                    }],
+                    "title": {
+                        "type": "plain_text",
+                        "text": "Delete Answers",
+                        "emoji": True
+                    },
+                    "submit": {
+                        "type": "plain_text",
+                        "text": "Submit",
+                        "emoji": True
+                    },
+                    "close": {
+                        "type": "plain_text",
+                        "text": "Cancel",
+                        "emoji": True
+                    }
+                }
+            )
+        else:
+            client.views_open(
+                trigger_id=command["trigger_id"],
+                view={
+                    "type": "modal",
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "You do not have any saved answers",
+                                "emoji": True
+                            }
+		                }
+                    ],
+                    "title": {
+                        "type": "plain_text",
+                        "text": "Delete Answers",
+                        "emoji": True
+                    }
+                }
+            )
     else:
         event = {
             "team": team,
