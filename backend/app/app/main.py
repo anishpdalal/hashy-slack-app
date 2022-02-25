@@ -357,28 +357,7 @@ def help_command(ack, respond, command, client):
                         "type": "mrkdwn",
                         "text": f"To delete an answer, enter `/hashy delete`"
                     }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"<https://www.loom.com/share/6cdd14a8ad1741939b1e990e5e111c7a?sharedAppSource=personal_library|Notion Integration Walk Through>"
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"<https://www.loom.com/share/3056708a7f4f4825a7abeaef34bd1ec1?sharedAppSource=personal_library|GDrive Integration Walk Through>"
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"<https://www.loom.com/share/82dbc6777d59420a933c720ccbe7347e?sharedAppSource=personal_library|Hashy Overview>"
-                    }
-                },
+                }
             ]
         })
     elif command_text == "integrate":
