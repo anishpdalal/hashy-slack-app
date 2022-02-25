@@ -184,7 +184,11 @@ def answer_query(event, query):
         ).json()
 
     blocks = []
-    if response.get("summary"):
+    sources = list(set([res.get("source") for res in response["search_results"]]))
+    db = database.SessionLocal()
+    doc_user_mapping = crud.get_documents(db, sources)
+    db.close()
+    if response.get("summary") and user in doc_user_mapping.get(response["search_results"][0].get("source"), []):
         if response["summary"] != "Unknown":
             blocks.append({
                 "type": "header",
@@ -254,10 +258,6 @@ def answer_query(event, query):
 			}
 		})
     
-    sources = list(set([res.get("source") for res in response["search_results"]]))
-    db = database.SessionLocal()
-    doc_user_mapping = crud.get_documents(db, sources)
-    db.close()
     for idx, result in enumerate(response["search_results"]):
         source = result.get("source","")
         if user not in doc_user_mapping.get(source, []):
@@ -356,6 +356,27 @@ def help_command(ack, respond, command, client):
                     "text": {
                         "type": "mrkdwn",
                         "text": f"To delete an answer, enter `/hashy delete`"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"<https://www.loom.com/share/2b10557ffb194ec692e1d7e063412ca2|Hashy Overview>"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"<https://www.loom.com/share/91548cc56bee43a6a0d21e1cc91a7dfa|GDrive Integration Walk Through>"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"<https://www.loom.com/share/eae6f60ae427436aa721cda203e15976|Notion Integration Walk Through>"
                     }
                 }
             ]
