@@ -104,6 +104,7 @@ def _get_most_similar_query(team, embedding):
     for match in matches:
         if match["score"] >= 0.4:
             results.append({
+                "id": match["id"],
                 "name": match["metadata"]["name"],
                 "team": team,
                 "text": match["metadata"]["text"],

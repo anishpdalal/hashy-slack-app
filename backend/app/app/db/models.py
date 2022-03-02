@@ -21,6 +21,8 @@ class Query(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     time_updated = Column(DateTime(timezone=True), onupdate=func.now())
+    upvotes = Column(Integer)
+    voters = Column(ARRAY(String))
 
 
 class Document(Base):
