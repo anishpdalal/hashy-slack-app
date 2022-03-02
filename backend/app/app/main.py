@@ -15,6 +15,7 @@ from slack_bolt.adapter.fastapi import SlackRequestHandler
 from slack_bolt.oauth.oauth_settings import OAuthSettings
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 from slack_sdk.web import WebClient
+from slack_sdk.errors import SlackApiError
 
 from app.db import crud, database, schemas
 
@@ -130,8 +131,11 @@ def handle_submit_answer_view(ack, body, client, view):
             msg = f"{user_name} has requested your help. Please install the Hashy Slack app and enter `/hashy {text}` to provide an answer to the question. Thanks!"
         try:
             client.chat_postMessage(channel=id, text=msg)
-        except:
-            pass
+        except SlackApiError as e:
+            if e.response["error"] == "not_in_channel":
+                channel_name = client.conversations_info(channel=id)["channel"]["name"]
+                msg = f"The channel {channel_name} couldn't receive your question. Invite Hashy to the channel and ask again!"
+                client.chat_postMessage(channel=user, text=msg)
     db.close()
 
 
