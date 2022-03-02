@@ -6,16 +6,13 @@ from sqlalchemy.sql.expression import update
 from . import models, schemas
 
 
-def get_queries(db: Session, team: str):
-    queries = db.query(models.Query).filter(models.Query.team == team).all()
-    db.close()
-    return queries
+def get_queries(db: Session, ids: List[str]):
+    queries = db.query(models.Query).filter(models.Query.query_id.in_(ids)).all()
+    return {query.query_id: query.upvotes for query in queries}
 
 
-def get_query_by_text(db: Session, team: str, text: str):
-    query = db.query(models.Query).filter(
-        models.Query.team == team, models.Query.text == text
-    ).first()
+def get_query(db: Session, query_id: str):
+    query = db.query(models.Query).filter(models.Query.query_id == query_id).first()
     return query
 
 
@@ -28,8 +25,8 @@ def create_query(db: Session, query: schemas.QueryCreate):
     return query
 
 
-def update_query(db: Session, id: int, fields: Dict[str, Any]):
-    db.query(models.Query).filter_by(id=id).update(fields)
+def update_query(db: Session, query_id: int, fields: Dict[str, Any]):
+    db.query(models.Query).filter_by(query_id=query_id).update(fields)
 
 
 def create_document(db: Session, doc: schemas.DocumentCreate):

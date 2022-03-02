@@ -161,6 +161,40 @@ def parse_summary(summary):
         return "\n".join(results)[0:3000]
     else:
         return summary
+
+
+@app.action("increment_count")
+def handle_some_action(ack, body, logger, client):
+    ack()
+    query_id = body["actions"][0]["value"]
+    db = database.SessionLocal()
+    query = crud.get_query(db, query_id)
+    if query:
+        upvotes = query.upvotes or 0
+        voters = query.voters or []
+        if body["user"]["id"] not in voters:
+            voters.append(body["user"]["id"])
+            voters = list(set(voters))
+            crud.update_query(db, query_id, {"upvotes": upvotes + 1, "voters": voters})
+            db.commit()
+            for block in body["view"]["blocks"]:
+                if block["block_id"] == query_id:
+                    block["accessory"]["text"]["text"] = f":arrow_up: ({upvotes + 1})"
+            client.views_update(
+                hash=body["view"]["hash"],
+                view_id=body["view"]["id"],
+                view={
+                    "callback_id": body["view"]["callback_id"],
+                    "type": body["view"]["type"],
+                    "title": body["view"]["title"],
+                    "blocks": body["view"]["blocks"],
+                    "private_metadata": body["view"]["private_metadata"],
+                    "submit": body["view"]["submit"],
+                    "close": body["view"]["close"],
+                    "clear_on_close": body["view"]["clear_on_close"]
+                }
+            )
+    db.close()
         
 
 def answer_query(event, query):
@@ -185,8 +219,10 @@ def answer_query(event, query):
 
     blocks = []
     sources = list(set([res.get("source") for res in response["search_results"]]))
+    query_ids = list(set([res["id"] for res in response["answers"]]))
     db = database.SessionLocal()
     doc_user_mapping = crud.get_documents(db, sources)
+    query_upvote_mapping = crud.get_queries(db, query_ids)
     db.close()
     if response.get("summary") and user in doc_user_mapping.get(response["search_results"][0].get("source"), []):
         if response["summary"] != "Unknown":
@@ -219,6 +255,7 @@ def answer_query(event, query):
 				"emoji": True
 			}
 		})
+        response["answers"].sort(key=lambda x: query_upvote_mapping.get(x["id"], 0) or 0, reverse=True)
     
     for idx, result in enumerate(response["answers"]):
         if idx != 0:
@@ -228,13 +265,24 @@ def answer_query(event, query):
         result_text = result["result"]
         last_modified = result.get("last_modified", "")
         source_text = f"<{source}|{name}>" if source else f"{name} on {last_modified}"
+        upvotes = query_upvote_mapping.get(result['id']) or 0
         blocks.append(
             {
+                "block_id": result["id"],
                 "type": "section",
                 "text": {
                     "type": "plain_text",
                     "text": f"{result_text}",
                     "emoji": True
+                },
+                "accessory": {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": f":arrow_up: ({upvotes})"
+                    },
+                    "value": result["id"],
+                    "action_id": "increment_count"
                 }
             }
         )
