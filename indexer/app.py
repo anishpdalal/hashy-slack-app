@@ -138,35 +138,38 @@ def _get_notion_document_text(file_id, token):
         text = []
         todos = []
         for block in child_blocks:
-            if block["type"] == "paragraph":
-                for snippet in block["paragraph"]["text"]:
-                    text.append(snippet["text"]["content"])
-            elif block["type"] == "callout":
-                for snippet in block["callout"]["text"]:
-                    text.append(snippet["text"]["content"])
-            elif block["type"] == "to_do":
-                for snippet in block["to_do"]["text"]:
-                    todos.append(snippet["text"]["content"])
-            elif block["type"] == "bulleted_list_item":
-                for snippet in block["bulleted_list_item"]["text"]:
-                    todos.append(snippet["text"]["content"])
-            elif block["type"] == "numbered_list_item":
-                for snippet in block["numbered_list_item"]["text"]:
-                    todos.append(snippet["text"]["content"])
-            elif block["type"] == "quote":
-                for snippet in block["quote"]["text"]:
-                    todos.append(snippet["text"]["content"])
-            elif block["type"] == "heading_1":
-                for snippet in block["heading_1"]["text"]:
-                    todos.append(snippet["text"]["content"])
-            elif block["type"] == "heading_2":
-                for snippet in block["heading_2"]["text"]:
-                    todos.append(snippet["text"]["content"])
-            elif block["type"] == "heading_3":
-                for snippet in block["heading_3"]["text"]:
-                    todos.append(snippet["text"]["content"])
-            else:
-                pass
+            try:
+                if block["type"] == "paragraph":
+                    for snippet in block["paragraph"]["text"]:
+                        text.append(snippet["text"]["content"])
+                elif block["type"] == "callout":
+                    for snippet in block["callout"]["text"]:
+                        text.append(snippet["text"]["content"])
+                elif block["type"] == "to_do":
+                    for snippet in block["to_do"]["text"]:
+                        todos.append(snippet["text"]["content"])
+                elif block["type"] == "bulleted_list_item":
+                    for snippet in block["bulleted_list_item"]["text"]:
+                        todos.append(snippet["text"]["content"])
+                elif block["type"] == "numbered_list_item":
+                    for snippet in block["numbered_list_item"]["text"]:
+                        todos.append(snippet["text"]["content"])
+                elif block["type"] == "quote":
+                    for snippet in block["quote"]["text"]:
+                        todos.append(snippet["text"]["content"])
+                elif block["type"] == "heading_1":
+                    for snippet in block["heading_1"]["text"]:
+                        todos.append(snippet["text"]["content"])
+                elif block["type"] == "heading_2":
+                    for snippet in block["heading_2"]["text"]:
+                        todos.append(snippet["text"]["content"])
+                elif block["type"] == "heading_3":
+                    for snippet in block["heading_3"]["text"]:
+                        todos.append(snippet["text"]["content"])
+                else:
+                    pass
+            except Exception as e:
+                logger.info(e)
         todos_text = ". ".join(todos)
         text.append(todos_text)
         processed_text = " ".join(" ".join(text).encode("ascii", "ignore").decode().strip().split())
