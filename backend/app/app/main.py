@@ -414,6 +414,20 @@ def help_command(ack, respond, command, client):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
+                        "text": f"<https://calendly.com/taherhassonjee/hashy-onboarding|Schedule an Onboarding Call>"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "Have any questions or feeback? Email us at help@nlp-labs.com"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
                         "text": f"<https://www.loom.com/share/2b10557ffb194ec692e1d7e063412ca2|Hashy Overview>"
                     }
                 },
@@ -724,8 +738,8 @@ def handle_app_home_opened(client, event, say):
                 f"3. Now think of an important question that someone else knows how to answer. Type in `/hashy <your question here>`\n"
                 "and select the coworker to ask the question to. The coworker will be prompted to enter an answer.\n"
                 "This is how Hashy seamlessly captures knowledge across teams.\n\n"
-                "4. Hashy also integrates with your existing documents to search through text relevant to your query.\n"
-                "Enter `/hashy help` to learn how to setup integrations and also watch an overview of Hashy."
+                "4. To learn how to get the most out of Hashy, book a 15 min <https://calendly.com/taherhassonjee/hashy-onboarding|Onboarding Call> with us.\n\n"
+                "5. Enter `/hashy help` to learn how to setup integrations and also watch an overview of Hashy.\n\n"
             )
     except:
         db.rollback()
