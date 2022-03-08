@@ -25,5 +25,17 @@ services:
       context: ./backend
       dockerfile: Dockerfile
 
+  scheduler-dev:
+    tty: true
+    volumes:
+      - ./scheduler:/function/scheduler
+    depends_on:
+      - db
+    env_file:
+      - .env
+    build:
+      context: ./scheduler
+      dockerfile: Dockerfile.dev
+
 volumes:
   app-db-data:
