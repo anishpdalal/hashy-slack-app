@@ -65,6 +65,8 @@ class NotionToken(Base):
     bot_id = Column(String, nullable=False)
     workspace_id = Column(String, nullable=False)
     channel_id = Column(String)
+    last_cursor = Column(String)
+    time_updated = Column(DateTime(timezone=True), onupdate=func.now())
 
 
 class GoogleToken(Base):

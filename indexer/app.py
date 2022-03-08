@@ -175,7 +175,7 @@ def _get_notion_document_text(file_id, token):
         processed_text = " ".join(" ".join(text).encode("ascii", "ignore").decode().strip().split())
     except Exception as e:
         logger.info(e)
-        return None
+        return ""
     return processed_text
 
 
@@ -403,14 +403,11 @@ def handler(event, context):
             text = _get_gdrive_text(file_id, google_token)
         else:
             continue
-        if type(text) == str and len(text) > 0:
-            if filetype == "drive#file|application/vnd.google-apps.spreadsheet":
-                sentences = re.split(REGEX_EXP, text)
-            else:
-                sentences = [f"{file_name}."]
-                sentences.extend(re.split(REGEX_EXP, text))
-        else:
-            continue
+        sentences = [file_name]
+        if filetype == "drive#file|application/vnd.google-apps.spreadsheet" and len(text) > 0:
+            sentences = re.split(REGEX_EXP, text)
+        elif len(text) > 0:
+            sentences.extend(re.split(REGEX_EXP, text))
         embeddings = search_model.encode(sentences).tolist()
         db = SessionLocal()
         fields = {

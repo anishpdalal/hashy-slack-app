@@ -1,0 +1,9 @@
+boto3
+cryptography
+psycopg2-binary
+pytz
+requests
+SQLAlchemy
+sqlalchemy-utils
+pytest
+flake8
