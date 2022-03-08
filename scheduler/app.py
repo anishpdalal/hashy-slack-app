@@ -115,7 +115,7 @@ def handler(event, context):
                 "file_id": result["id"]
             }
             upserts.append(
-                {"MessageBody": json.dumps(page), "Id": result["id"]}
+                {"MessageBody": json.dumps(page), "Id": f"{result['id']}_{token.user_id}"}
             )
             if len(upserts) >= UPSERT_LIMIT:
                 break
