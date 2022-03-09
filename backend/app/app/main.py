@@ -228,6 +228,29 @@ def answer_query(event, query):
     doc_user_mapping = crud.get_documents(db, sources)
     query_upvote_mapping = crud.get_queries(db, query_ids)
     db.close()
+    score = 20
+    score += min(2, len(sources)) * 10
+    score += min(2, len(query_ids)) * 20
+    score += min(2, sum([val or 0 for val in query_upvote_mapping.values()])) * 5
+    blocks.append({
+        "type": "header",
+        "text": {
+            "type": "plain_text",
+            "text": f"Knowledge Freshness Score: {score}",
+            "emoji": True
+        }
+    })
+    if len(query_ids) < 2:
+        blocks.append(
+            {
+                "type": "section",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Increase the score for this topic by contributing a team answer",
+                    "emoji": True
+                }
+            }
+        )
     if response.get("summary") and user in doc_user_mapping.get(response["search_results"][0].get("source"), []):
         if response["summary"] != "Unknown":
             blocks.append({

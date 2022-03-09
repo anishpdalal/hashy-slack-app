@@ -134,15 +134,46 @@ def _get_k_most_similar_docs(team, embedding, k=1, file_type=None):
     results = []
     matches = query_results["results"][0]["matches"]
     for match in matches:
+        result = {
+            "source": match["metadata"]["url"],
+            "name": match["metadata"]["title"],
+            "text": None,
+            "team": team,
+            "last_modified": None,
+            "result": match["metadata"]["text"],
+            "score": match["score"]
+        }
+        if match["score"] >= 0.5:
+            results.append(result)
+    if results:
+        return results
+    for match in matches:
+        result = {
+            "source": match["metadata"]["url"],
+            "name": match["metadata"]["title"],
+            "text": None,
+            "team": team,
+            "last_modified": None,
+            "result": match["metadata"]["text"],
+            "score": match["score"]
+        }
+        if match["score"] >= 0.4:
+            results.append(result)
+    if results:
+        return results
+    
+    for match in matches:
+        result = {
+            "source": match["metadata"]["url"],
+            "name": match["metadata"]["title"],
+            "text": None,
+            "team": team,
+            "last_modified": None,
+            "result": match["metadata"]["text"],
+            "score": match["score"]
+        }
         if match["score"] >= 0.3:
-            results.append({
-                "source": match["metadata"]["url"],
-                "name": match["metadata"]["title"],
-                "text": None,
-                "team": team,
-                "last_modified": None,
-                "result": match["metadata"]["text"]
-            })
+            results.append(result)
     return results
 
 def _get_summary(text, query):
