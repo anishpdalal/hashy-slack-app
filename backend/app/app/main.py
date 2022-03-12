@@ -232,6 +232,7 @@ def answer_query(event, query):
     score += min(2, len(sources)) * 10
     score += min(2, len(query_ids)) * 20
     score += min(2, sum([val or 0 for val in query_upvote_mapping.values()])) * 5
+    score = score if score != 20 else 0
     blocks.append({
         "type": "header",
         "text": {
@@ -290,6 +291,7 @@ def answer_query(event, query):
         source = result.get("source","")
         name = result.get("name")
         result_text = result["result"]
+        question = result.get("text", "")
         last_modified = result.get("last_modified", "")
         source_text = f"<{source}|{name}>" if source else f"{name} on {last_modified}"
         upvotes = query_upvote_mapping.get(result['id']) or 0
@@ -318,7 +320,7 @@ def answer_query(event, query):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"\n\n Source: {source_text}"
+                    "text": f"\n\n _Source_: {source_text}\n\n_Responding to_: {question}"
                 }
             }
         )
