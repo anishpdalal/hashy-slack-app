@@ -48,6 +48,26 @@ class NotionToken(Base):
     time_updated = Column(DateTime(timezone=True), onupdate=func.now())
 
 
+class GoogleToken(Base):
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False)
+    team = Column(String, nullable=False)
+    encrypted_token = Column(
+        EncryptedType(
+            String,
+            os.environ["TOKEN_SEC_KEY"],
+            AesEngine,
+            "pkcs5"
+        )
+    )
+    time_created = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    channel_id = Column(String)
+    time_updated = Column(DateTime(timezone=True), onupdate=func.now())
+    last_cursor = Column(String)
+
+
 class Document(Base):
     id = Column(Integer, primary_key=True, index=True)
     team = Column(String, nullable=False)
@@ -69,6 +89,10 @@ def get_notion_tokens(db):
     return db.query(NotionToken).order_by(NotionToken.time_updated.asc()).all()
 
 
+def get_google_tokens(db):
+    return db.query(GoogleToken).order_by(GoogleToken.time_updated.asc()).all()
+
+
 def get_notion_token(db, user_id, team_id):
     token = db.query(NotionToken).filter(
         NotionToken.user_id == user_id,
@@ -77,9 +101,27 @@ def get_notion_token(db, user_id, team_id):
     return token
 
 
-def update_last_cursor(db, id, last_cursor):
+def get_google_token(db, user_id, team_id):
+    token = db.query(GoogleToken).filter(
+        GoogleToken.user_id == user_id,
+        GoogleToken.team == team_id,
+    ).first()
+    return token
+
+
+def update_last_cursor_notion(db, id, last_cursor):
     try:
         db.query(NotionToken).filter_by(id=id).update({
+            "last_cursor": last_cursor
+        })
+        db.commit()
+    except Exception as e:
+        logger.error(e)
+
+
+def update_last_cursor_google(db, id, last_cursor):
+    try:
+        db.query(GoogleToken).filter_by(id=id).update({
             "last_cursor": last_cursor
         })
         db.commit()

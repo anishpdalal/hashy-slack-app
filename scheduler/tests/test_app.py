@@ -78,5 +78,3 @@ def test_get_notion_search_results_with_pagination(mock_post):
             }
         )
     )
-
-

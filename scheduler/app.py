@@ -5,6 +5,9 @@ import logging
 import os
 
 import boto3
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 import pytz
 import requests
 from sqlalchemy import create_engine
@@ -58,16 +61,51 @@ def get_notion_search_results(token):
     return results
 
 
-def get_tokens(db, user, team):
-    token = crud.get_notion_token(db, user, team)
-    if token:
-        tokens = [token]
+def get_google_search_results(token):
+    creds = Credentials.from_authorized_user_info({
+        "refresh_token": token.encrypted_token,
+        "client_id": os.environ["CLIENT_ID"],
+        "client_secret": os.environ["CLIENT_SECRET"],
+        "scopes": ["https://www.googleapis.com/auth/drive.file"]
+    })
+    creds.refresh(Request())
+    service = build("drive", "v3", credentials=creds)
+    start_cursor = token.last_cursor
+    if start_cursor:
+        results = service.files().list(
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            pageToken=start_cursor,
+            fields="nextPageToken, files(id, name, modifiedTime, mimeType)",
+            orderBy="modifiedTime desc"
+
+        ).execute()
     else:
-        tokens = crud.get_notion_tokens(db)
+        results = service.files().list(
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            fields="nextPageToken, files(id, name, modifiedTime, mimeType)",
+            orderBy="modifiedTime desc"
+        ).execute()
+    return results
+
+
+def get_tokens(db, user, team):
+    tokens = []
+    if user and team:
+        notion_token = crud.get_notion_token(db, user, team)
+        google_token = crud.get_google_token(db, user, team)
+        if notion_token:
+            tokens.append(notion_token)
+        if google_token:
+            tokens.append(google_token)
+    else:
+        tokens.extend(crud.get_notion_tokens(db))
+        tokens.extend(crud.get_google_tokens(db))
     return tokens
 
 
-def get_documents_to_upsert(db, team, user, search_results):
+def get_notion_documents_to_upsert(db, team, user, search_results):
     docs = []
     for result in search_results.get("results", []):
         file_id = result["id"]
@@ -108,13 +146,60 @@ def get_documents_to_upsert(db, team, user, search_results):
     return docs
 
 
+def get_google_documents_to_upsert(db, team, user, search_results):
+    docs = []
+    for result in search_results.get("files", []):
+        file_id = result["id"]
+        document = crud.get_document(db, file_id)
+        last_edited_time = pytz.utc.localize(
+            datetime.datetime.strptime(
+                result["modifiedTime"],
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            )
+        )
+        last_updated_in_db = None
+        if document:
+            last_updated_in_db = document.time_updated \
+                or document.time_created
+        doc_users = document.users if document else []
+        # If document hasn't been update since last time and user already
+        # has access don't process it
+        if last_updated_in_db and last_updated_in_db > last_edited_time \
+                and user in doc_users:
+            continue
+        url = f"https://drive.google.com/file/d/{result['id']}"
+        file_name = result["name"]
+        doc = {
+            "team": team,
+            "user": user,
+            "url": url,
+            "filetype": f"drive#file|{result['mimeType']}",
+            "file_name": file_name,
+            "file_id": result["id"]
+        }
+        docs.append(doc)
+    return docs
+
+
 def process(db, token):
-    search_results = get_notion_search_results(token)
-    next_cursor = search_results.get("next_cursor")
-    crud.update_last_cursor(db, token.id, next_cursor)
     user = token.user_id
     team = token.team
-    documents = get_documents_to_upsert(db, team, user, search_results)
+    if type(token).__name__ == "NotionToken":
+        search_results = get_notion_search_results(token)
+        next_cursor = search_results.get("next_cursor")
+        crud.update_last_cursor_notion(db, token.id, next_cursor)
+        documents = get_notion_documents_to_upsert(
+            db, team, user, search_results
+        )
+    elif type(token).__name__ == "GoogleToken":
+        search_results = get_google_search_results(token)
+        next_cursor = search_results.get("nextPageToken")
+        crud.update_last_cursor_google(db, token.id, next_cursor)
+        documents = get_google_documents_to_upsert(
+            db, team, user, search_results
+        )
+    else:
+        documents = []
     return documents
 
 
@@ -137,7 +222,7 @@ def handler(event, context):
             upserts.append(
                 {
                     "MessageBody": json.dumps(doc),
-                    "Id": f"{doc['id']}_{token.user_id}"
+                    "Id": f"{doc['file_id']}_{token.user_id}"
                 }
             )
 
