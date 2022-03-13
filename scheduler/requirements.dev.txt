@@ -1,5 +1,9 @@
 boto3
 cryptography
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
 psycopg2-binary
 pytz
 requests

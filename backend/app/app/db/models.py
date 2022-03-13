@@ -78,4 +78,6 @@ class GoogleToken(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     channel_id = Column(String)
+    time_updated = Column(DateTime(timezone=True), onupdate=func.now())
+    last_cursor = Column(String)
  
