@@ -114,6 +114,12 @@ def _get_most_similar_query(team, embedding):
     return results
 
 
+def _convert_date_to_str(d):
+    if d.__class__.__name__ == "date":
+      return str(d)
+    return d
+
+
 def _get_k_most_similar_docs(team, embedding, k=1, file_type=None):
     if file_type:
         filter = {
@@ -136,7 +142,7 @@ def _get_k_most_similar_docs(team, embedding, k=1, file_type=None):
     for match in matches:
         result = {
             "source": match["metadata"]["url"],
-            "name": match["metadata"]["title"],
+            "name": _convert_date_to_str(match["metadata"]["title"]),
             "text": None,
             "team": team,
             "last_modified": None,
@@ -150,7 +156,7 @@ def _get_k_most_similar_docs(team, embedding, k=1, file_type=None):
     for match in matches:
         result = {
             "source": match["metadata"]["url"],
-            "name": match["metadata"]["title"],
+            "name": _convert_date_to_str(match["metadata"]["title"]),
             "text": None,
             "team": team,
             "last_modified": None,
@@ -165,7 +171,7 @@ def _get_k_most_similar_docs(team, embedding, k=1, file_type=None):
     for match in matches:
         result = {
             "source": match["metadata"]["url"],
-            "name": match["metadata"]["title"],
+            "name": _convert_date_to_str(match["metadata"]["title"]),
             "text": None,
             "team": team,
             "last_modified": None,
