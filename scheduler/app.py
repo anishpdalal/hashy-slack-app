@@ -210,24 +210,37 @@ def handler(event, context):
     db = SessionLocal()
     sqs = boto3.resource("sqs", region_name="us-east-1")
     queue = sqs.get_queue_by_name(QueueName=os.getenv("SQS_QUEUE_NAME"))
-    team = event.get("team")
-    user = event.get("user")
-    upserts = []
-    tokens = get_tokens(db, user, team)
-    for token in tokens:
-        if len(upserts) >= UPSERT_LIMIT:
-            break
-        documents = process(db, token)
-        for doc in documents:
-            upserts.append(
-                {
-                    "MessageBody": json.dumps(doc),
-                    "Id": f"{doc['file_id']}_{token.user_id}"
-                }
-            )
+    if event.get("type") == "INDEX_SLACK_MESSAGES":
+        team_ids = crud.get_unique_teams(db)
+        teams = [
+            {
+                "MessageBody": json.dumps({"type": "slack", "team": team}),
+                "Id": team
+            }
+        
+        ]
+        logger.info(f"Processing slack messages for {len(team_ids)} teams")
+        for chunk in chunks(team_ids, batch_size=10):
+            queue.send_messages(Entries=chunk)
+    else:
+        team = event.get("team")
+        user = event.get("user")
+        upserts = []
+        tokens = get_tokens(db, user, team)
+        for token in tokens:
+            if len(upserts) >= UPSERT_LIMIT:
+                break
+            documents = process(db, token)
+            for doc in documents:
+                upserts.append(
+                    {
+                        "MessageBody": json.dumps(doc),
+                        "Id": f"{doc['file_id']}_{token.user_id}"
+                    }
+                )
 
+        logger.info(f"Upserting {len(upserts)} docs")
+        for chunk in chunks(upserts, batch_size=10):
+            queue.send_messages(Entries=chunk)
+    
     db.close()
-
-    logger.info(f"Upserting {len(upserts)} docs")
-    for chunk in chunks(upserts, batch_size=10):
-        queue.send_messages(Entries=chunk)
