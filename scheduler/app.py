@@ -216,11 +216,11 @@ def handler(event, context):
             {
                 "MessageBody": json.dumps({"type": "slack", "team": team}),
                 "Id": team
-            }
+            } for team in team_ids
         
         ]
         logger.info(f"Processing slack messages for {len(team_ids)} teams")
-        for chunk in chunks(team_ids, batch_size=10):
+        for chunk in chunks(teams, batch_size=10):
             queue.send_messages(Entries=chunk)
     else:
         team = event.get("team")
@@ -244,3 +244,4 @@ def handler(event, context):
             queue.send_messages(Entries=chunk)
     
     db.close()
+    engine.dispose()
