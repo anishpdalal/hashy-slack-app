@@ -423,7 +423,7 @@ def handler(event, context):
                                     }
                                 ]
                             ))
-
+                db.close()
             continue
 
 
