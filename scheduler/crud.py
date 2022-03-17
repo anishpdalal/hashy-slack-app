@@ -85,6 +85,25 @@ class Document(Base):
     time_updated = Column(DateTime(timezone=True), onupdate=func.now())
 
 
+class LoggedUser(Base):
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, nullable=False)
+    team_name = Column(String)
+    team_id = Column(String)
+    time_created = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    time_updated = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+def get_unique_teams(db):
+    return [
+        user.team_id for user in db.query(LoggedUser).distinct(
+            LoggedUser.team_id
+        ).options(load_only(LoggedUser.team_id)).all()
+    ]
+
+
 def get_notion_tokens(db):
     return db.query(NotionToken).order_by(NotionToken.time_updated.asc()).all()
 

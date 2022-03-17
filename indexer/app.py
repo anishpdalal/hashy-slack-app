@@ -1,3 +1,4 @@
+import datetime
 import io
 import itertools
 import json
@@ -10,11 +11,13 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
+import openai
 import pinecone
 import pdfminer.high_level
 import requests
 from sentence_transformers import SentenceTransformer
 from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
+from slack_sdk.web import WebClient
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy import create_engine, Column, Integer, PickleType, String, Text, DateTime
 from sqlalchemy.sql import func
@@ -35,6 +38,7 @@ database = os.environ["POSTGRES_DB"]
 port = os.environ["POSTGRES_PORT"]
 
 REGEX_EXP = r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s"
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
 @as_declarative()
@@ -86,6 +90,20 @@ class GoogleToken(Base):
     time_created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class Query(Base):
+    id = Column(Integer, primary_key=True, index=True)
+    query_id = Column(String)
+    team = Column(String, nullable=False)
+    user = Column(String, nullable=False)
+    channel = Column(String)
+    time_created = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    time_updated = Column(DateTime(timezone=True), onupdate=func.now())
+    upvotes = Column(Integer)
+    voters = Column(ARRAY(String))
 
 
 def _get_txt_document_text(token, url):
@@ -307,6 +325,7 @@ def extract_snippet(sentences, filetype, idx):
     snippet_processed = " ".join(snippet.split("\n")).strip()
     return snippet_processed
 
+
 def handler(event, context):
     SQLALCHEMY_DATABASE_URL = f"postgresql://{pg_user}:{password}@{host}:{port}/{database}"
     engine = create_engine(SQLALCHEMY_DATABASE_URL)
@@ -342,6 +361,71 @@ def handler(event, context):
             finally:
                 db.close()
             continue
+        elif payload.get("type") == "slack":
+            team = payload["team"]
+            bot = installation_store.find_bot(
+                enterprise_id=None,
+                team_id=team,
+            )
+            token = bot.bot_token
+            client = WebClient(token=token)
+            channels = [channel for channel in client.conversations_list(type="public_channel")["channels"] if channel["is_member"]]
+            for channel in channels:
+                channel_id = channel["id"]
+                channel_name = channel["name"]
+                domain = client.team_info(channel=channel_id)["team"]["domain"]
+                conversations = client.conversations_history(channel=channel_id, limit=100)
+                db = SessionLocal()
+                for message in conversations["messages"]:
+                    blocks = message.get("blocks", [])
+                    elem_type = blocks[0]["elements"][0]["elements"][0]["type"] if len(blocks) > 0 and "elements" in blocks[0] else None
+                    ts = message["ts"]
+                    user = message["user"]
+                    if not message.get("team"):
+                        continue
+                    query_id = f"p{message['ts'].replace('.', '')}"
+                    if not db.query(Query).filter(Query.user == user, Query.query_id == query_id).first():
+                        replies = client.conversations_replies(channel=channel_id, ts=ts)["messages"]
+                        if elem_type == "text" and len(replies) > 1:
+                            result = "\n".join([f"- {reply['text']}" for reply in replies[1:11] if reply.get("text")])
+                            text = message['text']
+                            response = openai.Completion.create(
+                                engine="text-davinci-002",
+                                prompt=f"Summarize the following into a question\n\n{text}",
+                                temperature=0.7,
+                                max_tokens=64,
+                                top_p=1,
+                                frequency_penalty=0,
+                                presence_penalty=0
+                            )
+                            query = response["choices"][0]["text"].strip()
+                            query_embedding = search_model.encode([query]).tolist()
+                            query = Query(**{
+                                "team": team,
+                                "user": user,
+                                "query_id": query_id
+                            })
+                            db.add(query)
+                            db.commit()
+                            db.refresh(query)
+                            index.upsert(vectors=zip(
+                                [query_id],
+                                query_embedding,
+                                [
+                                    {
+                                        "user": user,
+                                        "team": team,
+                                        "text": text,
+                                        "result": result,
+                                        "type": "answer",
+                                        "name": f"<https://{domain}.slack.com/archives/{channel_id}/{query_id}|{channel_name}>",
+                                        "last_modified": datetime.datetime.fromtimestamp(int(float(ts))).strftime("%m/%d/%Y"),
+                                    }
+                                ]
+                            ))
+
+            continue
+
 
         file_name = payload["file_name"]
         url = payload["url"]
