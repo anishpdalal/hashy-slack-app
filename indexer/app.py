@@ -380,8 +380,9 @@ def handler(event, context):
                     blocks = message.get("blocks", [])
                     elem_type = blocks[0]["elements"][0]["elements"][0]["type"] if len(blocks) > 0 and "elements" in blocks[0] else None
                     ts = message["ts"]
-                    user = message["user"]
-                    if not message.get("team"):
+                    user = message.get("user")
+                    team = message.get("team")
+                    if not team or not user:
                         continue
                     query_id = f"p{message['ts'].replace('.', '')}"
                     if not db.query(Query).filter(Query.user == user, Query.query_id == query_id).first():
