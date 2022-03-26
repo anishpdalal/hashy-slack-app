@@ -109,7 +109,8 @@ def _get_most_similar_query(team, embedding):
                 "team": team,
                 "text": match["metadata"]["text"],
                 "last_modified": match["metadata"]["last_modified"].strftime("%m/%d/%Y"),
-                "result": match["metadata"]["result"]
+                "result": match["metadata"]["result"],
+                "score": match["score"]
             })
     return results
 
@@ -246,6 +247,18 @@ def handler(event, context):
         }
         db = SessionLocal()
         try:
+            type = body.get("type")
+            if type == "channel":
+                response = openai.Completion.create(
+                    engine="text-davinci-002",
+                    prompt=f"Summarize the following into a question\n\n{query}",
+                    temperature=0.7,
+                    max_tokens=64,
+                    top_p=1,
+                    frequency_penalty=0,
+                    presence_penalty=0
+                )
+                query = response["choices"][0]["text"].strip("\n")
             query_embedding = search_model.encode([query])
             results["answers"] = _get_most_similar_query(team, query_embedding)
             k = body.get("count", 1)
@@ -254,6 +267,7 @@ def handler(event, context):
                 results["summary"] = _get_summary(results["search_results"][0]["result"], query)
             else:
                 results["summary"] = None
+            results["query"]= query
         except:
             db.rollback()
             raise
