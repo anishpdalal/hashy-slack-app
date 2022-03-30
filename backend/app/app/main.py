@@ -73,7 +73,7 @@ def handle_message_deleted(event, say):
     "type": "message",
 })
 def handle_message_channel(event, say, client):
-    if event.get("channel_type") == "channel":
+    if event.get("channel_type") == "channel" and not event.get("parent_user_id"):
         channel = event["channel"]
         ts = event["ts"]
         query = event["text"]
