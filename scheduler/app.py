@@ -61,7 +61,7 @@ def get_notion_search_results(token):
     return results
 
 
-def get_google_search_results(token):
+def get_drive_service(token):
     creds = Credentials.from_authorized_user_info({
         "refresh_token": token.encrypted_token,
         "client_id": os.environ["CLIENT_ID"],
@@ -70,6 +70,11 @@ def get_google_search_results(token):
     })
     creds.refresh(Request())
     service = build("drive", "v3", credentials=creds)
+    return service
+
+
+def get_google_search_results(token):
+    service = get_drive_service(token)
     start_cursor = token.last_cursor
     if start_cursor:
         results = service.files().list(
@@ -217,7 +222,7 @@ def handler(event, context):
                 "MessageBody": json.dumps({"type": "slack", "team": team}),
                 "Id": team
             } for team in team_ids
-        
+
         ]
         logger.info(f"Processing slack messages for {len(team_ids)} teams")
         for chunk in chunks(teams, batch_size=10):
@@ -242,6 +247,6 @@ def handler(event, context):
         logger.info(f"Upserting {len(upserts)} docs")
         for chunk in chunks(upserts, batch_size=10):
             queue.send_messages(Entries=chunk)
-    
+
     db.close()
     engine.dispose()
