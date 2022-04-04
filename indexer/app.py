@@ -388,7 +388,9 @@ def handler(event, context):
                     if not db.query(Query).filter(Query.user == user, Query.query_id == query_id).first():
                         replies = client.conversations_replies(channel=channel_id, ts=ts)["messages"]
                         if elem_type == "text" and len(replies) > 1:
-                            result = "\n".join([f"- {reply['text']}" for reply in replies[1:11] if reply.get("text")])
+                            result = "\n".join([f"- {reply['text']}" for reply in replies[1:11] if reply.get("text") and not reply.get("bot_id")])
+                            if not result:
+                                continue
                             text = message['text']
                             response = openai.Completion.create(
                                 engine="text-davinci-002",
