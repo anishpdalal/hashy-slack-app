@@ -428,6 +428,89 @@ def handle_view_events(ack, body, client, view):
     client.chat_postMessage(channel=channel, text=msg)
 
 
+@app.view("contribute_answer_view")
+def contribute_answer_view(ack, body, client, view):
+    question = view["state"]["values"]["save_question"]["save_question"]["value"]
+    answer = view["state"]["values"]["save_answer"]["save_answer"]["value"]
+    user = body["user"]["id"]
+    team = body["team"]["id"]
+    ack()
+    query = {
+        "team": team,
+        "user": user,
+        "text": question,
+        "result": answer
+    }
+    requests.post(
+        f"{os.environ['API_URL']}/create-answer",
+        data=json.dumps(query)
+    )
+    client.chat_postMessage(channel=user, text=f"Successfully saved answer to {question}")
+
+
+@app.shortcut("contribute_answer")
+def contribute_answer_shortcuts(ack, body, client):
+    ack()
+    trigger_id = body["trigger_id"]
+    text = body["message"]["text"]
+    blocks = [
+        {
+            "block_id": "save_question",
+            "type": "input",
+            "optional": False,
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "save_question",
+            },
+            "label": {
+                "type": "plain_text",
+                "text": "Enter question or topic",
+                "emoji": True
+            }
+        },
+        {
+            "block_id": "save_answer",
+            "type": "input",
+            "optional": False,
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "save_answer",
+                "multiline": True,
+                "initial_value": text
+            },
+            "label": {
+                "type": "plain_text",
+                "text": "Enter answer to share with your team",
+                "emoji": True
+            }
+        }
+    ]
+    client.views_open(
+        trigger_id=trigger_id,
+        view={
+            "callback_id": "contribute_answer_view",
+            "type": "modal",
+            "title": {
+                "type": "plain_text",
+                "text": f"Contribute Answer",
+                "emoji": True
+            },
+            "blocks": blocks,
+            "submit": {
+                "type": "plain_text",
+                "text": "Submit",
+                "emoji": True
+            },
+            "close": {
+                "type": "plain_text",
+                "text": "Close",
+                "emoji": True
+            },
+            "clear_on_close": True
+        },
+    )
+
+
 @app.command("/hashy")
 def help_command(ack, respond, command, client):
     ack()
