@@ -187,8 +187,8 @@ def _get_summary(text, query):
     if not query.endswith("?"):
         query = f"{query}?"
     response = openai.Completion.create(
-        engine="text-davinci-001",
-        prompt=f"Below is a prompt\n\n{text}\n\nIf the answer is unknown, say \"Unknown\"\n\nBased on the provided prompt, answer the question {query}",
+        engine="text-davinci-002",
+        prompt=f"Below is a prompt\n\n{text}\n\nBased on the provided prompt, answer the question {query} If the answer isn't known say \"Unknown\"",
         temperature=0,
         max_tokens=32,
         top_p=1,

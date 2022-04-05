@@ -246,17 +246,17 @@ def answer_query(event, query):
         ).json()
 
     blocks = []
-    sources = list(set([res.get("source") for res in response["search_results"]]))
-    query_ids = list(set([res["id"] for res in response["answers"]]))
+    sources = list(set([res.get("source") for res in response.get("search_results", [])]))
+    query_ids = list(set([res["id"] for res in response.get("answers", [])]))
     db = database.SessionLocal()
     doc_user_mapping = crud.get_documents(db, sources)
     query_upvote_mapping = crud.get_queries(db, query_ids)
     db.close()
-    score = 20
-    score += min(2, len(sources)) * 10
-    score += min(2, len(query_ids)) * 20
+    max_search_result_score = max([res.get("score", 0) for res in response["search_results"]]) if response.get("search_results", []) else 0
+    max_answer_score = max([res.get("score", 0) for res in response["answers"]]) if response.get("answers", []) else 0
+    score = int(max(max_search_result_score, max_answer_score) * 100)
     score += min(2, sum([val or 0 for val in query_upvote_mapping.values()])) * 5
-    score = score if score != 20 else 0
+    score = min(100, score) if score > 100 else score
     blocks.append({
         "type": "header",
         "text": {
@@ -282,7 +282,7 @@ def answer_query(event, query):
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"Answer",
+                    "text": f"Summarized Answer",
                     "emoji": True
                 }
             })
@@ -349,15 +349,29 @@ def answer_query(event, query):
             }
         )
     
+    google_token = crud.get_google_token(db, user)
+    notion_token = crud.get_notion_token(db, user)
+
+    
     if len(response["search_results"]) > 0:
         blocks.append({
 			"type": "header",
 			"text": {
 				"type": "plain_text",
-				"text": f"Search Results",
+				"text": f"Document Snippets",
 				"emoji": True
 			}
 		})
+        if not google_token and not notion_token:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"Set up an integration to view results from documents with the `/hashy integrate` command"
+                    }
+                }
+            )
     
     for idx, result in enumerate(response["search_results"]):
         source = result.get("source","")
