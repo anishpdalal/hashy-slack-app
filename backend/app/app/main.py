@@ -223,6 +223,56 @@ def handle_some_action(ack, body, logger, client):
                 }
             )
     db.close()
+
+
+
+@app.action("report_click")
+def handle_report_click(ack, body, client):
+    ack()
+    trigger_id = body["trigger_id"]
+    user = body["user"]["id"]
+    team = body["team"]["id"]
+    ts = body["message"]["ts"]
+    question = body["message"]["blocks"][0]["text"]["text"].split("Question/Topic: ")[1]
+    value = body["actions"][0]["value"]
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Query: {question}"
+            }
+	    },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": value
+            }
+	    }
+    ]
+    client.views_open(
+        trigger_id=trigger_id,
+        view={
+            "type": "modal",
+            "title": {
+                "type": "plain_text",
+                "text": f"Takeaways",
+                "emoji": True
+            },
+            "blocks": blocks,
+            "close": {
+                "type": "plain_text",
+                "text": "Close",
+                "emoji": True
+            },
+            "clear_on_close": True
+        },
+    )
+    requests.post(
+        f"{os.environ['API_URL']}/log-event",
+        data=json.dumps({"team": team, "query": question, "user": user, "type": "REPORT_CLICK", "ts": ts})
+    )
         
 
 def answer_query(event, query):
