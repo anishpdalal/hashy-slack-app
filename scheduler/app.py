@@ -82,7 +82,8 @@ def get_google_search_results(token):
             includeItemsFromAllDrives=True,
             pageToken=start_cursor,
             fields="nextPageToken, files(id, name, modifiedTime, mimeType)",
-            orderBy="modifiedTime desc"
+            orderBy="modifiedTime desc",
+            trashed="trashed=false" 
 
         ).execute()
     else:
@@ -90,7 +91,8 @@ def get_google_search_results(token):
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
             fields="nextPageToken, files(id, name, modifiedTime, mimeType)",
-            orderBy="modifiedTime desc"
+            orderBy="modifiedTime desc",
+            q="trashed=false"
         ).execute()
     return results
 

@@ -105,7 +105,8 @@ def test_get_google_search_results(mock_get_service, google_token):
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
             fields="nextPageToken, files(id, name, modifiedTime, mimeType)",
-            orderBy="modifiedTime desc"
+            orderBy="modifiedTime desc",
+            q="trashed=false"
         )
 
 
@@ -124,7 +125,8 @@ def test_get_google_search_results_with_pagination(
             includeItemsFromAllDrives=True,
             pageToken="last_cursor",
             fields="nextPageToken, files(id, name, modifiedTime, mimeType)",
-            orderBy="modifiedTime desc"
+            orderBy="modifiedTime desc",
+            q="trashed=false"
         )
 
 
