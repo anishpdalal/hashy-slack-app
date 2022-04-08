@@ -83,7 +83,7 @@ def get_google_search_results(token):
             pageToken=start_cursor,
             fields="nextPageToken, files(id, name, modifiedTime, mimeType)",
             orderBy="modifiedTime desc",
-            trashed="trashed=false" 
+            q="trashed=false" 
 
         ).execute()
     else:

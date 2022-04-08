@@ -77,20 +77,21 @@ def handle_message_channel(event, say, client):
         channel = event["channel"]
         ts = event["ts"]
         query = event["text"]
-        team = event["team"]
-        user = event["user"]
-        response = requests.post(
-            f"{os.environ['API_URL']}/search",
-            data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": "channel"})
-        ).json()
-        modified_query = response["query"]
-        search_scores = [res["score"] for res in response["search_results"]]
-        answer_scores = [res["score"] for res in response["answers"]]
-        max_search_score = max(search_scores) if len(search_scores) else 0
-        max_answer_score = max(answer_scores) if len(answer_scores) else 0
-        if max(max_search_score, max_answer_score) >= 0.50:
-            message = f"Found documents with relevant content. Search with `/hashy {modified_query}`."
-            client.chat_postMessage(channel=channel, thread_ts=ts, text=message)
+        if "?" in query:
+            team = event["team"]
+            user = event["user"]
+            response = requests.post(
+                f"{os.environ['API_URL']}/search",
+                data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": "channel"})
+            ).json()
+            modified_query = response["query"]
+            search_scores = [res["score"] for res in response["search_results"]]
+            answer_scores = [res["score"] for res in response["answers"]]
+            max_search_score = max(search_scores) if len(search_scores) else 0
+            max_answer_score = max(answer_scores) if len(answer_scores) else 0
+            if max(max_search_score, max_answer_score) >= 0.50:
+                message = f"Found documents with relevant content. Search with `/hashy {modified_query}`."
+                client.chat_postMessage(channel=channel, thread_ts=ts, text=message)
 
 
 @app.event({
