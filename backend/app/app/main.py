@@ -234,8 +234,12 @@ def handle_report_click(ack, body, client):
     user = body["user"]["id"]
     team = body["team"]["id"]
     ts = body["message"]["ts"]
-    question = body["message"]["blocks"][0]["text"]["text"].split("Question/Topic: ")[1]
-    value = body["actions"][0]["value"]
+    block_id = body["actions"][0]["block_id"]
+    block_messages = body["message"]["blocks"]
+    idx = block_messages.index(next(filter(lambda n: n.get("block_id") == block_id, block_messages)))
+    question_block = block_messages[idx - 3]
+    question = question_block["text"]["text"].split("Question/Topic: ")[1]
+    value = block_messages[idx]["elements"][0]["value"]
     blocks = [
         {
             "type": "section",
