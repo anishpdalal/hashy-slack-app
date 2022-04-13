@@ -1,16 +1,11 @@
 alembic
 boto3
-cryptography
 fastapi
 google-api-python-client
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
 gunicorn
-psycopg2-binary
-pydantic
 requests
 slack-bolt
-SQLAlchemy
-sqlalchemy-utils
 uvicorn
