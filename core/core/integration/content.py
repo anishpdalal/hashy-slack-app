@@ -9,6 +9,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import pdfminer
 import requests
+from slack_sdk.web import WebClient
 
 
 logger = logging.getLogger()
@@ -109,7 +110,13 @@ def _get_gdrive_docs(integration):
     return docs
 
 
-def list_content(integration):
+def _get_slack_channels(integration):
+    client = WebClient(token=integration.bot_token)
+    channels = [channel for channel in client.conversations_list(type="public_channel")["channels"] if channel["is_member"]]
+    
+
+
+def list_content_stores(integration):
     if integration.type == "notion":
         return _get_notion_docs(integration)
     elif integration.type == "gdrive":
