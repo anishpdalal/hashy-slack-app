@@ -19,7 +19,7 @@ logger.setLevel(logging.INFO)
 
 def _get_notion_docs(integration):
     headers = {
-        "Authorization": f"Bearer {integration.encrypted_token}",
+        "Authorization": f"Bearer {integration.token}",
         "Content-type": "application/json",
         "Notion-Version": "2021-08-16"
     }
@@ -75,7 +75,7 @@ def _get_gdrive_service(token):
 
 
 def _get_gdrive_docs(integration):
-    service = _get_gdrive_service(integration.encrypted_token)
+    service = _get_gdrive_service(integration.token)
     start_cursor = integration.last_cursor
     if start_cursor:
         results = service.files().list(
@@ -110,10 +110,22 @@ def _get_gdrive_docs(integration):
     return docs
 
 
-def _get_slack_channels(integration):
-    client = WebClient(token=integration.bot_token)
-    channels = [channel for channel in client.conversations_list(type="public_channel")["channels"] if channel["is_member"]]
-    
+def _get_slack_threads(integration):
+    client = WebClient(token=integration.token)
+    public_channels = client.conversations_list(type="public_channel")["channels"]
+    public_channels = [channel for channel in public_channels if channel["is_member"]]
+    threads = []
+    for channel in public_channels:
+        threads.append({
+            "team_id": integration.team_id,
+            "user_id": None,
+            "url": None,
+            "type": "slack_thread",
+            "name": channel["name"],
+            "source_id": channel["id"],
+            "source_last_updated": None
+        })
+    return threads
 
 
 def list_content_stores(integration):
@@ -121,11 +133,14 @@ def list_content_stores(integration):
         return _get_notion_docs(integration)
     elif integration.type == "gdrive":
         return _get_gdrive_docs(integration)
+    elif integration.type == "slack":
+        return _get_slack_threads(integration)
     else:
         return []
 
 
-def _get_slack_txt_document_text(token, url):
+def _get_slack_txt_document_text(token, content_store):
+    url = content_store["url"]
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "text/html"
@@ -134,7 +149,8 @@ def _get_slack_txt_document_text(token, url):
     return text
 
 
-def _get_slack_pdf_document_text(token, url):
+def _get_slack_pdf_document_text(token, content_store):
+    url = content_store["url"]
     headers = {
         "Authorization": f"Bearer {token}",
     }
@@ -145,9 +161,10 @@ def _get_slack_pdf_document_text(token, url):
     return text
 
 
-def _get_notion_document_text(file_id, token):
+def _get_notion_document_text(token, content_store):
+    block_id = content_store["source_id"]
     try:
-        api_url = f"https://api.notion.com/v1/blocks/{file_id}/children"
+        api_url = f"https://api.notion.com/v1/blocks/{block_id}/children"
         headers = {
             "Authorization": f"Bearer {token}",
             "Notion-Version": "2021-08-16"
@@ -204,7 +221,8 @@ def _get_notion_document_text(file_id, token):
     return processed_text
 
 
-def _get_gdrive_pdf_document_text(file_id, token):
+def _get_gdrive_pdf_document_text(token, content_store):
+    file_id = content_store["source_id"]
     service = _get_gdrive_service(token)
     request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     fh = io.BytesIO()
@@ -216,7 +234,8 @@ def _get_gdrive_pdf_document_text(file_id, token):
     return text
 
 
-def _get_gdrive_document_text(file_id, token):
+def _get_gdrive_document_text(token, content_store):
+    file_id = content_store["source_id"]
     service = _get_gdrive_service(token)
     request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     fh = io.BytesIO()
@@ -269,7 +288,8 @@ def _read_strucutural_elements(elements):
     return text
 
 
-def _get_google_doc_text(file_id, token):
+def _get_google_doc_text(token, content_store):
+    file_id = content_store["source_id"]
     creds = Credentials.from_authorized_user_info({
         "refresh_token": token,
         "client_id": os.environ["CLIENT_ID"],
@@ -282,3 +302,20 @@ def _get_google_doc_text(file_id, token):
     doc_content = doc.get('body').get('content')
     text = _read_strucutural_elements(doc_content)
     return text
+
+
+def get_content_from_store(integration, content_store):
+    token = integration.token
+    type = content_store.type
+    text = None
+    if type == "notion":
+        text = _get_notion_document_text(token, content_store)
+    elif type == "drive#file|application/pdf":
+        text = _get_gdrive_pdf_document_text(token, content_store)
+    elif type == "drive#file|application/vnd.google-apps.document":
+        text = _get_google_doc_text(token, content_store)
+    elif type == "drive#file|text/plain":
+        text = _get_gdrive_document_text(token, content_store)
+    elif type == "docx" or type == "application/pdf":
+        text = _get_slack_pdf_document_text(token, content_store)
+    

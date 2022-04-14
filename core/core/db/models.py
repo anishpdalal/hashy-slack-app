@@ -40,7 +40,6 @@ class ContentStore(Base):
 
 class Integration(Base):
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String, nullable=False)
     team_id = Column(String, nullable=False)
     type = Column(String, nullable=False)
     token = Column(
@@ -48,6 +47,7 @@ class Integration(Base):
         AesEngine,
         "pkcs5"
     ), nullable=False)
+    user_id = Column(String)
     created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
