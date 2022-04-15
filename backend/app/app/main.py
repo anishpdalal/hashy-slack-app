@@ -76,7 +76,7 @@ def handle_message_channel(event, say, client):
     if event.get("channel_type") == "channel" and not event.get("parent_user_id"):
         channel = event["channel"]
         ts = event["ts"]
-        query = event["text"]
+        query = event.get("text")
         if "?" in query:
             team = event["team"]
             user = event["user"]
@@ -85,12 +85,14 @@ def handle_message_channel(event, say, client):
                 data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": "channel"})
             ).json()
             modified_query = response["query"]
-            search_scores = [res["score"] for res in response["search_results"]]
-            answer_scores = [res["score"] for res in response["answers"]]
-            max_search_score = max(search_scores) if len(search_scores) else 0
+            answer_scores = [res["score"] for res in response.get("answers", [])]
             max_answer_score = max(answer_scores) if len(answer_scores) else 0
-            if max(max_search_score, max_answer_score) >= 0.50:
-                message = f"Found documents with relevant content. Search with `/hashy {modified_query}`."
+            if max_answer_score >= 0.70:
+                name = response["answers"][0]["name"]
+                if name.startswith("<"):
+                    message = f"Found a related slack thread in {name}. Search with `/hashy {modified_query}` to view the content."
+                else:
+                    message = f"Found relevant content. Search with `/hashy {modified_query}` to view it."
                 client.chat_postMessage(channel=channel, thread_ts=ts, text=message)
 
 
