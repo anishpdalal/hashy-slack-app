@@ -1,3 +1,4 @@
+from datetime import datetime
 import io
 import json
 import logging
@@ -8,8 +9,11 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import pdfminer
+import pytz
 import requests
 from slack_sdk.web import WebClient
+
+from db import crud
 
 
 logger = logging.getLogger()
@@ -17,7 +21,7 @@ logging.getLogger("pdfminer").setLevel(logging.WARNING)
 logger.setLevel(logging.INFO)
 
 
-def _get_notion_docs(integration):
+def _get_notion_pages(integration):
     headers = {
         "Authorization": f"Bearer {integration.token}",
         "Content-type": "application/json",
@@ -37,29 +41,32 @@ def _get_notion_docs(integration):
     if start_cursor:
         request_body["start_cursor"] = start_cursor
     api_url = "https://api.notion.com/v1/search"
-    results = requests.post(
+    notion_pages = requests.post(
         api_url, headers=headers, data=json.dumps(request_body)
     ).json()
-    docs = []
-    for result in results.get("results", []):
-        if result["archived"]:
+    result = {
+        "cursor": notion_pages.get("next_cursor"),
+        "content_stores": []
+    }
+    for page in notion_pages.get("results", []):
+        if page["archived"]:
             continue
-        url = result["url"]
+        url = page["url"]
         split_url = url.split("/")[-1].split("-")
         if len(split_url) == 1:
             file_name = "Untitled"
         else:
             file_name = " ".join(split_url[:-1])
-        docs.append({
+        result["content_stores"].append({
             "team_id": integration.team_id,
             "user_id": integration.user_id,
             "url": url,
             "type": "notion",
             "name": file_name,
-            "source_id": result["id"],
-            "source_last_updated": result["last_edited_time"]
+            "source_id": page["id"],
+            "source_last_updated": page["last_edited_time"]
         })
-    return docs
+    return result
 
 
 def _get_gdrive_service(token):
@@ -78,7 +85,7 @@ def _get_gdrive_docs(integration):
     service = _get_gdrive_service(integration.token)
     start_cursor = integration.last_cursor
     if start_cursor:
-        results = service.files().list(
+        files = service.files().list(
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
             pageToken=start_cursor,
@@ -88,49 +95,94 @@ def _get_gdrive_docs(integration):
 
         ).execute()
     else:
-        results = service.files().list(
+        files = service.files().list(
             supportsAllDrives=True,
             includeItemsFromAllDrives=True,
             fields="nextPageToken, files(id, name, modifiedTime, mimeType)",
             orderBy="modifiedTime desc",
             q="trashed=false"
         ).execute()
-    docs = []
-    for result in results.get("files", []):
-        source_id = result["id"]
-        docs.append({
+    result = {
+        "cursor": files.get("next_cursor"),
+        "content_stores": []
+    }
+    for file in files.get("files", []):
+        source_id = file["id"]
+        result["content_stores"].append({
             "team_id": integration.team_id,
             "user_id": integration.user_id,
             "url": f"https://drive.google.com/file/d/{source_id}",
             "type": f"drive#file|{result['mimeType']}",
-            "name": result["name"],
+            "name": file["name"],
             "source_id": source_id,
-            "source_last_updated": result["modifiedTime"]
+            "source_last_updated": file["modifiedTime"]
         })
-    return docs
+    return result
 
 
 def _get_slack_threads(integration):
     client = WebClient(token=integration.token)
     public_channels = client.conversations_list(type="public_channel")["channels"]
     public_channels = [channel for channel in public_channels if channel["is_member"]]
-    threads = []
+    result = {
+        "cursor": None,
+        "content_stores": []
+    }
+    last_cursor = integration.last_cursor
+    current_channel_cursors = json.loads(last_cursor) if last_cursor else {}
+    new_channel_cursors = {}
+    messages = []
     for channel in public_channels:
-        threads.append({
-            "team_id": integration.team_id,
-            "user_id": None,
-            "url": None,
-            "type": "slack_thread",
-            "name": channel["name"],
-            "source_id": channel["id"],
-            "source_last_updated": None
-        })
-    return threads
+        channel_id = channel["id"]
+        channel_name = channel["name"]
+        domain = client.team_info(channel=channel_id)["team"]["domain"]
+        most_recent_thread = crud.get_most_recent_slack_content_store(channel_id)
+        if most_recent_thread:
+            thread_id = most_recent_thread.source_id
+            recent_conversations = client.conversations_history(
+                channel=channel_id,
+                include_all_metadata=True,
+                inclusive=False,
+                oldest=thread_id
+            )
+            messages.extend(recent_conversations.get("messages", []))
+        historical_conversations = client.conversations_history(
+            channel=channel_id,
+            include_all_metadata=True,
+            cursor = current_channel_cursors.get(channel_id)
+        )
+        new_channel_cursors[channel_id] = historical_conversations["response_metadata"].get("next_cursor")
+        messages.extend(historical_conversations.get("messages", []))
+    threads = []
+    for message in messages:
+        element_type = None
+        num_reply_users = len([user for user in message.get("reply_users", []) if user.startswith("U")])
+        blocks = message.get("blocks", [])
+        if len(blocks) > 0:
+            first_block = blocks[0]
+            first_element = first_block["elements"][0] if "elements" in first_block and type(first_block["elements"]) == list else None
+            element_type = first_element["elements"][0]["type"] if "elements" in first_element and type(first_element["elements"]) == list else None
+        if num_reply_users > 0 and (element_type == "text" or element_type == "broadcast"):
+            source_id = message["ts"]
+            threads.append({
+                "team_id": integration.team_id,
+                "user_id": channel_id,
+                "url": f"<https://{domain}.slack.com/archives/{channel_id}/{source_id}|{channel_name}>",
+                "type": "slack_thread",
+                "name": f"{channel_name}_{message['ts']}",
+                "source_id": source_id,
+                "source_last_updated": pytz.utc.localize(datetime.fromtimestamp(float(message["ts"]))).strftime(
+                    "%Y-%m-%dT%H:%M:%S.%fZ"
+                )
+            })
+    result["content_stores"] = threads
+    result["cursor"] = json.dumps(new_channel_cursors)
+    return result
 
 
 def list_content_stores(integration):
     if integration.type == "notion":
-        return _get_notion_docs(integration)
+        return _get_notion_pages(integration)
     elif integration.type == "gdrive":
         return _get_gdrive_docs(integration)
     elif integration.type == "slack":

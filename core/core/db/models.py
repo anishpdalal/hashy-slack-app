@@ -24,9 +24,9 @@ class SlackUser(Base):
 class ContentStore(Base):
     id = Column(Integer, primary_key=True, index=True)
     team_id = Column(String, nullable=False)
-    name = Column(String, nullable=False)
     type = Column(String, nullable=False)
     source_id = Column(String, nullable=False, unique=True)
+    name = Column(String)
     user_ids = Column(ARRAY(String))
     source_last_updated = Column(DateTime(timezone=True))
     url = Column(String)

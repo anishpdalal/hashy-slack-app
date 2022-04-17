@@ -49,6 +49,15 @@ def get_content_store(source_id: str):
         return content
 
 
+def get_most_recent_slack_content_store(channel_id: str):
+    with Session() as db:
+        content = db.query(ContentStore).filter(
+            ContentStore.user_ids.any(channel_id),
+            ContentStore.type == "slack_thread"
+        ).order_by(ContentStore.source_last_updated.desc()).first()
+        return content
+
+
 def get_user_integrations(team_id:str, user_id: str):
     with Session() as db:
         integrations = db.query(Integration).filter(
