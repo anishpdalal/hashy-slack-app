@@ -1,4 +1,3 @@
-from asyncio import log
 import base64
 import itertools
 import json
@@ -77,7 +76,7 @@ def handle_message_channel(event, say, client):
         channel = event["channel"]
         ts = event["ts"]
         query = event.get("text")
-        if "?" in query:
+        if query and "?" in query:
             team = event["team"]
             user = event["user"]
             response = requests.post(
@@ -87,13 +86,34 @@ def handle_message_channel(event, say, client):
             modified_query = response["query"]
             answer_scores = [res["score"] for res in response.get("answers", [])]
             max_answer_score = max(answer_scores) if len(answer_scores) else 0
-            if max_answer_score >= 0.70:
+            if max_answer_score >= 0.60:
                 name = response["answers"][0]["name"]
-                if name.startswith("<"):
-                    message = f"Found a related slack thread in {name}. Search with `/hashy {modified_query}` to view the content."
-                else:
-                    message = f"Found relevant content. Search with `/hashy {modified_query}` to view it."
-                client.chat_postMessage(channel=channel, thread_ts=ts, text=message)
+                blocks = [
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"Found a related slack thread in {name}."
+                        }
+                    },
+                    {
+                        "type": "actions",
+                        "elements": [
+                            {
+                                "type": "button",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "View More",
+                                    "emoji": True
+                                },
+                                "value": modified_query,
+                                "action_id": "view_more_button"
+                            }
+			            ]
+		            }
+                ]
+                client.chat_postMessage(channel=channel, thread_ts=ts, blocks=blocks)
+
 
 
 @app.event({
@@ -123,6 +143,78 @@ def handle_message_file_share(event, say):
         logger.info(message)
         say(f"Processing File {file_name}")
         queue.send_message(MessageBody=json.dumps(message))
+
+
+@app.action("view_more_button")
+def handle_view_more_click(ack, body, client):
+    ack()
+    trigger_id = body["trigger_id"]
+    user = body["user"]["id"]
+    team = body["team"]["id"]
+    query = body["actions"][0]["value"]
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Query: {query}"
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Loading Results..."
+            }
+        },
+    ]
+    response = client.views_open(
+        trigger_id=trigger_id,
+        view={
+            "type": "modal",
+            "title": {
+                "type": "plain_text",
+                "text": f"Results",
+                "emoji": True
+            },
+            "blocks": blocks
+        }
+    )
+    event = {
+        "user": user,
+        "team": team
+    }
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Query: {query}"
+            }
+        }
+    ]
+    result_blocks = answer_query(event, query)
+    blocks.extend(result_blocks)
+    client.views_update(
+        hash=response["view"]["hash"],
+        view_id=response["view"]["id"],
+        view={
+            "callback_id": "submit_answer_view",
+            "type": "modal",
+            "title": {
+                "type": "plain_text",
+                "text": "Results",
+                "emoji": True
+            },
+            "blocks": blocks,
+            "close": {
+                "type": "plain_text",
+                "text": "Close",
+                "emoji": True
+            },
+            "clear_on_close": True
+        }
+    )
 
 
 @app.view("submit_answer_view")
