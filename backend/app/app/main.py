@@ -193,7 +193,7 @@ def handle_view_more_click(ack, body, client):
             }
         }
     ]
-    result_blocks = answer_query(event, query)
+    result_blocks = answer_query(event, query, type="auto_reply_click")
     blocks.extend(result_blocks)
     client.views_update(
         hash=response["view"]["hash"],
@@ -374,7 +374,7 @@ def handle_report_click(ack, body, client):
     )
         
 
-def answer_query(event, query):
+def answer_query(event, query, type=None):
     team = event["team"]
     user = event["user"]
     logger.info(json.dumps({
@@ -386,12 +386,12 @@ def answer_query(event, query):
     if "|" in query:
         response = requests.post(
             f"{os.environ['API_URL']}/tabular-search",
-            data=json.dumps({"team": team, "query": query, "user": user, "count": 10})
+            data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": type})
         ).json()
     else:
         response = requests.post(
             f"{os.environ['API_URL']}/search",
-            data=json.dumps({"team": team, "query": query, "user": user, "count": 10})
+            data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": type})
         ).json()
 
     blocks = []
