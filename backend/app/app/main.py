@@ -463,7 +463,7 @@ def answer_query(event, query, type=None):
             blocks.append({"type": "divider"})
         source = result.get("source","")
         name = result.get("name")
-        result_text = result["result"]
+        result_text = "\n".join(result["result"].split("\n")[0:1])
         question = result.get("text", "")
         last_modified = result.get("last_modified", "")
         source_text = f"<{source}|{name}>" if source else f"{name} on {last_modified}"
@@ -473,9 +473,8 @@ def answer_query(event, query, type=None):
                 "block_id": result["id"],
                 "type": "section",
                 "text": {
-                    "type": "plain_text",
-                    "text": f"{result_text}",
-                    "emoji": True
+                    "type": "mrkdwn",
+                    "text": f"\n\n_Responding to_: {question}\n\n _Source_: {source_text}\n\n"
                 },
                 "accessory": {
                     "type": "button",
@@ -493,14 +492,15 @@ def answer_query(event, query, type=None):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"\n\n _Source_: {source_text}\n\n_Responding to_: {question}"
+                    "text": result_text
                 }
             }
         )
     
+    db = database.SessionLocal()
     google_token = crud.get_google_token(db, user)
     notion_token = crud.get_notion_token(db, user)
-
+    db.close()
     
     if len(response["search_results"]) > 0:
         blocks.append({
