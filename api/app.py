@@ -116,7 +116,7 @@ def _get_most_similar_query(team, embedding):
 
 
 def _convert_date_to_str(d):
-    if d.__class__.__name__ == "date":
+    if d.__class__.__name__ == "date" or d.__class__.__name__ == "datetime":
       return str(d)
     return d
 
