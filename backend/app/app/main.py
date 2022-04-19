@@ -447,7 +447,7 @@ def answer_query(event, query, type=None):
             )
             blocks.append({"type": "divider"})
 
-    if len(response["answers"]) > 0:
+    if len(response.get("answers", [])) > 0:
         blocks.append({
 			"type": "header",
 			"text": {
@@ -458,7 +458,7 @@ def answer_query(event, query, type=None):
 		})
         response["answers"].sort(key=lambda x: query_upvote_mapping.get(x["id"], 0) or 0, reverse=True)
     
-    for idx, result in enumerate(response["answers"]):
+    for idx, result in enumerate(response.get("answers", [])):
         if idx != 0:
             blocks.append({"type": "divider"})
         source = result.get("source","")
