@@ -370,7 +370,7 @@ def handler(event, context):
                 )
                 token = bot.bot_token
                 client = WebClient(token=token)
-                channels = [channel for channel in client.conversations_list(type="public_channel")["channels"] if channel["is_member"]]
+                channels = [channel for channel in client.conversations_list(type="public_channel", limit=1000)["channels"] if channel["is_member"]]
                 for channel in channels:
                     channel_id = channel["id"]
                     channel_name = channel["name"]
