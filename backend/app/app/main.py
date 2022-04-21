@@ -1,4 +1,3 @@
-from asyncio import log
 import base64
 import itertools
 import json
@@ -76,10 +75,10 @@ def handle_message_channel(event, say, client):
     if event.get("channel_type") == "channel" and not event.get("parent_user_id"):
         channel = event["channel"]
         ts = event["ts"]
+        team = event.get("team")
+        user = event.get("user")
         query = event.get("text")
-        if "?" in query:
-            team = event["team"]
-            user = event["user"]
+        if query and "?" in query and user and team:
             response = requests.post(
                 f"{os.environ['API_URL']}/search",
                 data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": "channel"})
@@ -87,13 +86,34 @@ def handle_message_channel(event, say, client):
             modified_query = response["query"]
             answer_scores = [res["score"] for res in response.get("answers", [])]
             max_answer_score = max(answer_scores) if len(answer_scores) else 0
-            if max_answer_score >= 0.70:
+            if max_answer_score >= 0.60:
                 name = response["answers"][0]["name"]
-                if name.startswith("<"):
-                    message = f"Found a related slack thread in {name}. Search with `/hashy {modified_query}` to view the content."
-                else:
-                    message = f"Found relevant content. Search with `/hashy {modified_query}` to view it."
-                client.chat_postMessage(channel=channel, thread_ts=ts, text=message)
+                blocks = [
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"Found a related slack message in {name}."
+                        }
+                    },
+                    {
+                        "type": "actions",
+                        "elements": [
+                            {
+                                "type": "button",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": "View More",
+                                    "emoji": True
+                                },
+                                "value": modified_query,
+                                "action_id": "view_more_button"
+                            }
+			            ]
+		            }
+                ]
+                client.chat_postMessage(channel=channel, thread_ts=ts, blocks=blocks)
+
 
 
 @app.event({
@@ -123,6 +143,78 @@ def handle_message_file_share(event, say):
         logger.info(message)
         say(f"Processing File {file_name}")
         queue.send_message(MessageBody=json.dumps(message))
+
+
+@app.action("view_more_button")
+def handle_view_more_click(ack, body, client):
+    ack()
+    trigger_id = body["trigger_id"]
+    user = body["user"]["id"]
+    team = body["team"]["id"]
+    query = body["actions"][0]["value"]
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Query: {query}"
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Loading Results..."
+            }
+        },
+    ]
+    response = client.views_open(
+        trigger_id=trigger_id,
+        view={
+            "type": "modal",
+            "title": {
+                "type": "plain_text",
+                "text": f"Results",
+                "emoji": True
+            },
+            "blocks": blocks
+        }
+    )
+    event = {
+        "user": user,
+        "team": team
+    }
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"Query: {query}"
+            }
+        }
+    ]
+    result_blocks = answer_query(event, query, type="auto_reply_click")
+    blocks.extend(result_blocks)
+    client.views_update(
+        hash=response["view"]["hash"],
+        view_id=response["view"]["id"],
+        view={
+            "callback_id": "submit_answer_view",
+            "type": "modal",
+            "title": {
+                "type": "plain_text",
+                "text": "Results",
+                "emoji": True
+            },
+            "blocks": blocks,
+            "close": {
+                "type": "plain_text",
+                "text": "Close",
+                "emoji": True
+            },
+            "clear_on_close": True
+        }
+    )
 
 
 @app.view("submit_answer_view")
@@ -282,7 +374,7 @@ def handle_report_click(ack, body, client):
     )
         
 
-def answer_query(event, query):
+def answer_query(event, query, type=None):
     team = event["team"]
     user = event["user"]
     logger.info(json.dumps({
@@ -294,12 +386,12 @@ def answer_query(event, query):
     if "|" in query:
         response = requests.post(
             f"{os.environ['API_URL']}/tabular-search",
-            data=json.dumps({"team": team, "query": query, "user": user, "count": 10})
+            data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": type})
         ).json()
     else:
         response = requests.post(
             f"{os.environ['API_URL']}/search",
-            data=json.dumps({"team": team, "query": query, "user": user, "count": 10})
+            data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": type})
         ).json()
 
     blocks = []
@@ -355,7 +447,7 @@ def answer_query(event, query):
             )
             blocks.append({"type": "divider"})
 
-    if len(response["answers"]) > 0:
+    if len(response.get("answers", [])) > 0:
         blocks.append({
 			"type": "header",
 			"text": {
@@ -366,12 +458,12 @@ def answer_query(event, query):
 		})
         response["answers"].sort(key=lambda x: query_upvote_mapping.get(x["id"], 0) or 0, reverse=True)
     
-    for idx, result in enumerate(response["answers"]):
+    for idx, result in enumerate(response.get("answers", [])):
         if idx != 0:
             blocks.append({"type": "divider"})
         source = result.get("source","")
         name = result.get("name")
-        result_text = result["result"]
+        result_text = "\n".join(result["result"].split("\n")[0:1])
         question = result.get("text", "")
         last_modified = result.get("last_modified", "")
         source_text = f"<{source}|{name}>" if source else f"{name} on {last_modified}"
@@ -381,9 +473,8 @@ def answer_query(event, query):
                 "block_id": result["id"],
                 "type": "section",
                 "text": {
-                    "type": "plain_text",
-                    "text": f"{result_text}",
-                    "emoji": True
+                    "type": "mrkdwn",
+                    "text": f"\n\n_Responding to_: {question}\n\n _Source_: {source_text}\n\n"
                 },
                 "accessory": {
                     "type": "button",
@@ -396,19 +487,21 @@ def answer_query(event, query):
                 }
             }
         )
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"\n\n _Source_: {source_text}\n\n_Responding to_: {question}"
+        if result_text:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": result_text
+                    }
                 }
-            }
-        )
+            )
     
+    db = database.SessionLocal()
     google_token = crud.get_google_token(db, user)
     notion_token = crud.get_notion_token(db, user)
-
+    db.close()
     
     if len(response["search_results"]) > 0:
         blocks.append({

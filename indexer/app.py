@@ -362,71 +362,74 @@ def handler(event, context):
                 db.close()
             continue
         elif payload.get("type") == "slack":
-            team = payload["team"]
-            bot = installation_store.find_bot(
-                enterprise_id=None,
-                team_id=team,
-            )
-            token = bot.bot_token
-            client = WebClient(token=token)
-            channels = [channel for channel in client.conversations_list(type="public_channel")["channels"] if channel["is_member"]]
-            for channel in channels:
-                channel_id = channel["id"]
-                channel_name = channel["name"]
-                domain = client.team_info(channel=channel_id)["team"]["domain"]
-                conversations = client.conversations_history(channel=channel_id, limit=100)
-                db = SessionLocal()
-                for message in conversations["messages"]:
-                    blocks = message.get("blocks", [])
-                    elem_type = blocks[0]["elements"][0]["elements"][0]["type"] if len(blocks) > 0 and "elements" in blocks[0] else None
-                    ts = message["ts"]
-                    user = message.get("user")
-                    team = message.get("team")
-                    if not team or not user:
-                        continue
-                    query_id = f"p{message['ts'].replace('.', '')}"
-                    if not db.query(Query).filter(Query.user == user, Query.query_id == query_id).first():
-                        replies = client.conversations_replies(channel=channel_id, ts=ts)["messages"]
-                        if elem_type == "text" and len(replies) > 1:
-                            result = "\n".join([f"- {reply['text']}" for reply in replies[1:11] if reply.get("text") and not reply.get("bot_id")])
-                            if not result:
-                                continue
-                            text = message['text']
-                            response = openai.Completion.create(
-                                engine="text-davinci-002",
-                                prompt=f"Summarize the following into a question\n\n{text}",
-                                temperature=0.7,
-                                max_tokens=64,
-                                top_p=1,
-                                frequency_penalty=0,
-                                presence_penalty=0
-                            )
-                            query = response["choices"][0]["text"].strip()
-                            query_embedding = search_model.encode([query]).tolist()
-                            query = Query(**{
-                                "team": team,
-                                "user": user,
-                                "query_id": query_id
-                            })
-                            db.add(query)
-                            db.commit()
-                            db.refresh(query)
-                            index.upsert(vectors=zip(
-                                [query_id],
-                                query_embedding,
-                                [
-                                    {
-                                        "user": user,
-                                        "team": team,
-                                        "text": text,
-                                        "result": result,
-                                        "type": "answer",
-                                        "name": f"<https://{domain}.slack.com/archives/{channel_id}/{query_id}|{channel_name}>",
-                                        "last_modified": datetime.datetime.fromtimestamp(int(float(ts))).strftime("%m/%d/%Y"),
-                                    }
-                                ]
-                            ))
-                db.close()
+            try:
+                team = payload["team"]
+                bot = installation_store.find_bot(
+                    enterprise_id=None,
+                    team_id=team,
+                )
+                token = bot.bot_token
+                client = WebClient(token=token)
+                channels = [channel for channel in client.conversations_list(type="public_channel", limit=1000)["channels"] if channel["is_member"]]
+                for channel in channels:
+                    channel_id = channel["id"]
+                    channel_name = channel["name"]
+                    domain = client.team_info(channel=channel_id)["team"]["domain"]
+                    team = client.team_info(channel=channel_id)["team"]["id"]
+                    conversations = client.conversations_history(channel=channel_id, limit=100)
+                    db = SessionLocal()
+                    for message in conversations["messages"]:
+                        ts = message["ts"]
+                        user = message.get("user")
+                        if not user:
+                            continue
+                        text = message.get("text")
+                        num_replies = message.get("reply_count", 0)
+                        query_id = f"p{message['ts'].replace('.', '')}"
+                        if not db.query(Query).filter(Query.user == user, Query.query_id == query_id).first():
+                            if text and num_replies >= 1:
+                                replies = client.conversations_replies(channel=channel_id, ts=ts)["messages"]
+                                result = "\n".join([f"- {reply['text']}" for reply in replies[1:11] if reply.get("text") and not reply.get("bot_id")])
+                                if not result:
+                                    continue
+                                response = openai.Completion.create(
+                                    engine="text-davinci-002",
+                                    prompt=f"Summarize the following into a question\n\n{text}",
+                                    temperature=0.7,
+                                    max_tokens=64,
+                                    top_p=1,
+                                    frequency_penalty=0,
+                                    presence_penalty=0
+                                )
+                                query = response["choices"][0]["text"].strip()
+                                query_embedding = search_model.encode([query]).tolist()
+                                query = Query(**{
+                                    "team": team,
+                                    "user": user,
+                                    "query_id": query_id
+                                })
+                                db.add(query)
+                                db.commit()
+                                db.refresh(query)
+                                index.upsert(vectors=zip(
+                                    [query_id],
+                                    query_embedding,
+                                    [
+                                        {
+                                            "user": user,
+                                            "team": team,
+                                            "text": text,
+                                            "result": result,
+                                            "type": "answer",
+                                            "name": f"<https://{domain}.slack.com/archives/{channel_id}/{query_id}|{channel_name}>",
+                                            "last_modified": datetime.datetime.fromtimestamp(int(float(ts))).strftime("%m/%d/%Y"),
+                                        }
+                                    ]
+                                ))
+                    db.close()
+            except Exception as e:
+                logger.error(e)
+                continue
             continue
 
 
@@ -441,54 +444,57 @@ def handler(event, context):
         
         text = None
         
-
-        if mimetype == "text/plain":
-            bot = installation_store.find_bot(
-                enterprise_id=None,
-                team_id=team,
-            )
-            token = bot.bot_token
-            text = _get_txt_document_text(token, url)
-        elif mimetype == "application/pdf":
-            bot = installation_store.find_bot(
-                enterprise_id=None,
-                team_id=team,
-            )
-            token = bot.bot_token
-            text = _get_pdf_document_text(token, url)
-        elif filetype == "docx" and converted_pdf is not None:
-            bot = installation_store.find_bot(
-                enterprise_id=None,
-                team_id=team,
-            )
-            token = bot.bot_token
-            text = _get_pdf_document_text(token, url)
-        elif filetype == "notion":
-            db = SessionLocal()
-            notion_token = db.query(NotionToken).filter(NotionToken.user_id == user).first().encrypted_token
-            db.close()
-            text = _get_notion_document_text(file_id, notion_token)
-        elif filetype == "drive#file|application/pdf":
-            db = SessionLocal()
-            google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
-            db.close()
-            text = _get_gdrive_pdf_text(file_id, google_token)
-        elif filetype == "drive#file|application/vnd.google-apps.document":
-            db = SessionLocal()
-            google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
-            db.close()
-            text = _get_google_doc_text(file_id, google_token)
-        elif filetype == "drive#file|application/vnd.google-apps.spreadsheet":
-            db = SessionLocal()
-            google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
-            db.close()
-            text = _get_google_sheets_text(file_id, file_name, google_token)
-        elif filetype == "drive#file|text/plain":
-            db = SessionLocal()
-            google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
-            db.close()
-            text = _get_gdrive_text(file_id, google_token)
-        else:
+        try:
+            if mimetype == "text/plain":
+                bot = installation_store.find_bot(
+                    enterprise_id=None,
+                    team_id=team,
+                )
+                token = bot.bot_token
+                text = _get_txt_document_text(token, url)
+            elif mimetype == "application/pdf":
+                bot = installation_store.find_bot(
+                    enterprise_id=None,
+                    team_id=team,
+                )
+                token = bot.bot_token
+                text = _get_pdf_document_text(token, url)
+            elif filetype == "docx" and converted_pdf is not None:
+                bot = installation_store.find_bot(
+                    enterprise_id=None,
+                    team_id=team,
+                )
+                token = bot.bot_token
+                text = _get_pdf_document_text(token, url)
+            elif filetype == "notion":
+                db = SessionLocal()
+                notion_token = db.query(NotionToken).filter(NotionToken.user_id == user).first().encrypted_token
+                db.close()
+                text = _get_notion_document_text(file_id, notion_token)
+            elif filetype == "drive#file|application/pdf":
+                db = SessionLocal()
+                google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
+                db.close()
+                text = _get_gdrive_pdf_text(file_id, google_token)
+            elif filetype == "drive#file|application/vnd.google-apps.document":
+                db = SessionLocal()
+                google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
+                db.close()
+                text = _get_google_doc_text(file_id, google_token)
+            elif filetype == "drive#file|application/vnd.google-apps.spreadsheet":
+                db = SessionLocal()
+                google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
+                db.close()
+                text = _get_google_sheets_text(file_id, file_name, google_token)
+            elif filetype == "drive#file|text/plain":
+                db = SessionLocal()
+                google_token = db.query(GoogleToken).filter(GoogleToken.user_id == user).first()
+                db.close()
+                text = _get_gdrive_text(file_id, google_token)
+            else:
+                continue
+        except Exception as e:
+            logger.error(e)
             continue
         sentences = [file_name]
         if filetype == "drive#file|application/vnd.google-apps.spreadsheet" and len(text) > 0:
