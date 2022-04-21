@@ -75,10 +75,10 @@ def handle_message_channel(event, say, client):
     if event.get("channel_type") == "channel" and not event.get("parent_user_id"):
         channel = event["channel"]
         ts = event["ts"]
+        team = event.get("team")
+        user = event.get("user")
         query = event.get("text")
-        if query and "?" in query:
-            team = event["team"]
-            user = event["user"]
+        if query and "?" in query and user and team:
             response = requests.post(
                 f"{os.environ['API_URL']}/search",
                 data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": "channel"})
@@ -487,15 +487,16 @@ def answer_query(event, query, type=None):
                 }
             }
         )
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": result_text
+        if result_text:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": result_text
+                    }
                 }
-            }
-        )
+            )
     
     db = database.SessionLocal()
     google_token = crud.get_google_token(db, user)
