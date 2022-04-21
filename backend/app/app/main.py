@@ -93,7 +93,7 @@ def handle_message_channel(event, say, client):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"Found a related slack thread in {name}."
+                            "text": f"Found a related slack message in {name}."
                         }
                     },
                     {
