@@ -6,8 +6,8 @@ import os
 import boto3
 import pytz
 
-from core.core.integration import reader
-from core.core.db import crud
+from core.integration import reader
+from core.db import crud
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)

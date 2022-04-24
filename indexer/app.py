@@ -8,8 +8,8 @@ import pinecone
 import pytz
 from sentence_transformers import SentenceTransformer
 
-from core.core.integration import reader
-from core.core.db import crud
+from core.integration import reader
+from core.db import crud
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)

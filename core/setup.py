@@ -4,7 +4,7 @@ setup(
     name="core",
     version="0.1.0",
     packages=find_packages(include=["core", "core.*"]),
-    python_requires=">=3.8",
+    python_requires=">=3.7",
     install_requires=[
         "psycopg2-binary",
         "cryptography",

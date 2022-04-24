@@ -34,7 +34,6 @@ class ContentStore(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated = Column(DateTime(timezone=True), onupdate=func.now())
-    engagement = Column(ARRAY(String))
     is_boosted = Column(Boolean, default=False)
 
 
