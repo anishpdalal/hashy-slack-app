@@ -1,7 +1,6 @@
 import os
 from typing import List
 
-from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallationStore
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -18,10 +17,6 @@ SQLALCHEMY_DATABASE_URL = f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
 Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-installation_store = SQLAlchemyInstallationStore(
-    client_id=os.environ["SLACK_CLIENT_ID"],
-    engine=engine
-)
 
 
 def get_slack_user(team_id: str, user_id: str):
@@ -61,6 +56,18 @@ def get_integration(id: int):
     with Session() as db:
         integration = db.query(Integration).filter(Integration.id == id).first()
         return integration
+
+
+def create_integration(integration: dict):
+    with Session() as db:
+        try:
+            integration = Integration(**integration)
+            db.add(integration)
+        except:
+            db.rollback()
+            raise
+        else:
+            db.commit()
 
 
 def create_content_store(content: dict):
