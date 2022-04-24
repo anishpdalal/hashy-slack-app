@@ -13,7 +13,7 @@ RUN apt update && \
     rm -rf /var/lib/apt/lists
 
 COPY ./app/requirements.txt /app/requirements.txt
-COPY ./shared/core-0.1.0-py3-none-any.whl /app/core-0.1.0-py3-none-any.whl
+COPY ./dist/core-0.1.0-py3-none-any.whl /app/core-0.1.0-py3-none-any.whl
 RUN python3 -m pip install --upgrade pip
 RUN python3 -m pip install wheel
 RUN python3 -m pip install --no-cache-dir --upgrade -r /app/requirements.txt
