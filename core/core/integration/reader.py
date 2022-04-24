@@ -172,20 +172,20 @@ def list_content_stores(integration):
         return []
 
 
-def _get_slack_txt_document_text(token, content_store):
+def _get_slack_txt_document_text(integration, content_store):
     url = content_store["url"]
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {integration.token}",
         "Content-Type": "text/html"
     }
     text = requests.get(url, headers=headers).text
     return text
 
 
-def _get_slack_pdf_document_text(token, content_store):
+def _get_slack_pdf_document_text(integration, content_store):
     url = content_store["url"]
     headers = {
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {integration.token}",
     }
     byte_str = requests.get(url, headers=headers).content
     pdf_memory_file = io.BytesIO()
@@ -194,12 +194,12 @@ def _get_slack_pdf_document_text(token, content_store):
     return text
 
 
-def _get_notion_document_text(token, content_store):
+def _get_notion_document_text(integration, content_store):
     block_id = content_store["source_id"]
     try:
         api_url = f"https://api.notion.com/v1/blocks/{block_id}/children"
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {integration.token}",
             "Notion-Version": "2021-08-16"
         }
         params = {}
@@ -254,9 +254,9 @@ def _get_notion_document_text(token, content_store):
     return processed_text
 
 
-def _get_gdrive_pdf_document_text(token, content_store):
+def _get_gdrive_pdf_document_text(integration, content_store):
     file_id = content_store["source_id"]
-    service = _get_gdrive_service(token)
+    service = _get_gdrive_service(integration.token)
     request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
@@ -267,9 +267,9 @@ def _get_gdrive_pdf_document_text(token, content_store):
     return text
 
 
-def _get_gdrive_document_text(token, content_store):
+def _get_gdrive_document_text(integration, content_store):
     file_id = content_store["source_id"]
-    service = _get_gdrive_service(token)
+    service = _get_gdrive_service(integration.token)
     request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
     fh = io.BytesIO()
     downloader = MediaIoBaseDownload(fh, request)
@@ -321,10 +321,10 @@ def _read_strucutural_elements(elements):
     return text
 
 
-def _get_google_doc_text(token, content_store):
+def _get_google_doc_text(integration, content_store):
     file_id = content_store["source_id"]
     creds = Credentials.from_authorized_user_info({
-        "refresh_token": token,
+        "refresh_token": integration.token,
         "client_id": os.environ["CLIENT_ID"],
         "client_secret": os.environ["CLIENT_SECRET"],
         "scopes": ["https://www.googleapis.com/auth/drive.file"]
