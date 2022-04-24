@@ -28,6 +28,31 @@ def get_slack_user(team_id: str, user_id: str):
         return user
 
 
+def create_slack_user(slack_user: dict):
+    with Session() as db:
+        try:
+            slack_user = SlackUser(**slack_user)
+            db.add(slack_user)
+        except:
+            db.rollback()
+            raise
+        else:
+            db.commit()
+
+
+def update_slack_user(id: int, fields: dict):
+    with Session() as db:
+        try:
+            db.query(SlackUser).filter(
+                SlackUser.id == id
+            ).update(fields)
+        except:
+            db.rollback()
+            raise
+        else:
+            db.commit()
+
+
 def get_content_stores(source_ids: List[str]):
     with Session() as db:
         content = db.query(ContentStore).filter(
@@ -42,6 +67,31 @@ def get_content_store(source_id: str):
             ContentStore.source_id == source_id
         ).first()
         return content
+
+
+def create_content_store(content: dict):
+    with Session() as db:
+        try:
+            content = ContentStore(**content)
+            db.add(content)
+        except:
+            db.rollback()
+            raise
+        else:
+            db.commit()
+
+
+def update_content_store(source_id: str, fields: dict):
+    with Session() as db:
+        try:
+            db.query(ContentStore).filter(
+                ContentStore.source_id == source_id
+            ).update(fields)
+        except:
+            db.rollback()
+            raise
+        else:
+            db.commit()
 
 
 def get_all_integrations():
@@ -63,31 +113,6 @@ def create_integration(integration: dict):
         try:
             integration = Integration(**integration)
             db.add(integration)
-        except:
-            db.rollback()
-            raise
-        else:
-            db.commit()
-
-
-def create_content_store(content: dict):
-    with Session() as db:
-        try:
-            content = ContentStore(**content)
-            db.add(content)
-        except:
-            db.rollback()
-            raise
-        else:
-            db.commit()
-
-
-def update_content_store(source_id: str, fields: dict):
-    with Session() as db:
-        try:
-            db.query(ContentStore).filter(
-                ContentStore.source_id == source_id
-            ).update(fields)
         except:
             db.rollback()
             raise
