@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Boolean, Column, Integer, String, DateTime
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.sql import func
 from sqlalchemy_utils import EncryptedType
@@ -19,6 +19,7 @@ class SlackUser(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated = Column(DateTime(timezone=True), onupdate=func.now())
+    onboarded = Column(Boolean, default=False)
 
 
 class ContentStore(Base):
@@ -26,16 +27,15 @@ class ContentStore(Base):
     team_id = Column(String, nullable=False)
     type = Column(String, nullable=False)
     source_id = Column(String, nullable=False, unique=True)
-    name = Column(String)
     user_ids = Column(ARRAY(String))
     source_last_updated = Column(DateTime(timezone=True))
-    url = Column(String)
-    num_vectors = Column(Integer)
+    num_vectors = Column(Integer, default=0)
     created = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated = Column(DateTime(timezone=True), onupdate=func.now())
     engagement = Column(ARRAY(String))
+    is_boosted = Column(Boolean, default=False)
 
 
 class Integration(Base):

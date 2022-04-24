@@ -1,24 +1,24 @@
-from datetime import datetime
+import datetime
 import io
 import json
 import logging
 import os
+import re
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 import pdfminer
-import pytz
 import requests
 from slack_sdk.web import WebClient
-
-from db import crud
 
 
 logger = logging.getLogger()
 logging.getLogger("pdfminer").setLevel(logging.WARNING)
 logger.setLevel(logging.INFO)
+
+REGEX_EXP = r"(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s"
 
 
 def _get_notion_pages(integration):
@@ -120,63 +120,44 @@ def _get_gdrive_docs(integration):
     return result
 
 
-def _get_slack_threads(integration):
-    client = WebClient(token=integration.token)
-    public_channels = client.conversations_list(type="public_channel")["channels"]
-    public_channels = [channel for channel in public_channels if channel["is_member"]]
+def _get_slack_channels(integration):
     result = {
         "cursor": None,
         "content_stores": []
     }
-    last_cursor = integration.last_cursor
-    current_channel_cursors = json.loads(last_cursor) if last_cursor else {}
-    new_channel_cursors = {}
-    messages = []
-    for channel in public_channels:
-        channel_id = channel["id"]
-        channel_name = channel["name"]
-        domain = client.team_info(channel=channel_id)["team"]["domain"]
-        most_recent_thread = crud.get_most_recent_slack_content_store(channel_id)
-        if most_recent_thread:
-            thread_id = most_recent_thread.source_id
-            recent_conversations = client.conversations_history(
-                channel=channel_id,
-                include_all_metadata=True,
-                inclusive=False,
-                oldest=thread_id
-            )
-            messages.extend(recent_conversations.get("messages", []))
-        historical_conversations = client.conversations_history(
-            channel=channel_id,
-            include_all_metadata=True,
-            cursor = current_channel_cursors.get(channel_id)
+    client = WebClient(token=integration.token)
+    domain = client.team_info()["team"]["domain"]
+    channels = []
+    public_channels = client.conversations_list(type="public_channel", limit=1000)
+    channels.extend(public_channels.get("channels", []))
+    next_cursor = public_channels["response_metadata"]["next_cursor"]
+    while next_cursor:
+        public_channels = client.conversations_list(
+            type="public_channel",
+            limit=1000,
+            cursor=next_cursor
         )
-        new_channel_cursors[channel_id] = historical_conversations["response_metadata"].get("next_cursor")
-        messages.extend(historical_conversations.get("messages", []))
-    threads = []
-    for message in messages:
-        element_type = None
-        num_reply_users = len([user for user in message.get("reply_users", []) if user.startswith("U")])
-        blocks = message.get("blocks", [])
-        if len(blocks) > 0:
-            first_block = blocks[0]
-            first_element = first_block["elements"][0] if "elements" in first_block and type(first_block["elements"]) == list else None
-            element_type = first_element["elements"][0]["type"] if "elements" in first_element and type(first_element["elements"]) == list else None
-        if num_reply_users > 0 and (element_type == "text" or element_type == "broadcast"):
-            source_id = message["ts"]
-            threads.append({
+        channels.extend(public_channels.get("channels", []))
+        next_cursor = public_channels["response_metadata"]["next_cursor"]
+    channels = [channel for channel in channels if channel["is_member"]]
+    for channel in channels:
+        channel_id = channel["id"]
+        source_last_updated = None
+        latest_reply = client.conversations_replies(channel=channel_id, limit=1)
+        if "messages" in latest_reply and len(latest_reply["messages"]) == 1:
+            source_last_updated = latest_reply["messages"][0]["ts"]
+        result["content_stores"].append(
+            {
                 "team_id": integration.team_id,
-                "user_id": channel_id,
-                "url": f"<https://{domain}.slack.com/archives/{channel_id}/{source_id}|{channel_name}>",
-                "type": "slack_thread",
-                "name": f"{channel_name}_{message['ts']}",
-                "source_id": source_id,
-                "source_last_updated": pytz.utc.localize(datetime.fromtimestamp(float(message["ts"]))).strftime(
-                    "%Y-%m-%dT%H:%M:%S.%fZ"
-                )
-            })
-    result["content_stores"] = threads
-    result["cursor"] = json.dumps(new_channel_cursors)
+                "user_id": None,
+                "url": f"https://{domain}.slack.com/archives/{channel_id}",
+                "type": "slack_channel",
+                "name": channel["name"],
+                "source_id": channel_id,
+                "source_last_updated": source_last_updated
+            }
+        )
+
     return result
 
 
@@ -186,7 +167,7 @@ def list_content_stores(integration):
     elif integration.type == "gdrive":
         return _get_gdrive_docs(integration)
     elif integration.type == "slack":
-        return _get_slack_threads(integration)
+        return _get_slack_channels(integration)
     else:
         return []
 
@@ -264,7 +245,7 @@ def _get_notion_document_text(token, content_store):
                     pass
             except Exception as e:
                 logger.info(e)
-        todos_text = ". ".join(todos)
+        todos_text = " ".join(todos)
         text.append(todos_text)
         processed_text = " ".join(" ".join(text).encode("ascii", "ignore").decode().strip().split())
     except Exception as e:
@@ -356,18 +337,117 @@ def _get_google_doc_text(token, content_store):
     return text
 
 
-def get_content_from_store(integration, content_store):
-    token = integration.token
-    type = content_store.type
+def _should_index_slack_message(message):
+    text = message.get("text")
+    user = message.get("user")
+    type = message.get("type")
+    if not text or not user or type != "message":
+        return False
+    elif "?" in text:
+        return True
+    elif "https://" in text:
+        return True
+    elif len(text.split()) >= 15:
+        return True
+    else:
+        return False
+    
+    
+
+def _get_slack_channel_messages(integration, content_store):
+    client = WebClient(token=integration.token)
+    channel_id = content_store["source_id"]
+    last_updated = content_store["source_last_updated"]
+    if last_updated:
+        messages = client.conversations_replies(
+            channel=channel_id,
+            oldest=last_updated,
+            inclusive=False
+        )["messages"]
+    else:
+        messages = []
+        replies = client.conversations_replies(channel=channel_id, limit=1000)
+        messages.extend(replies.get("messages", []))
+        next_cursor = replies["response_metadata"]["next_cursor"]
+        while next_cursor:
+            replies = client.conversations_replies(channel=channel_id, limit=1000, cursor=next_cursor)
+            messages.extend(replies.get("messages", []))
+            next_cursor = replies["response_metadata"]["next_cursor"]
+    filter_messages = []
+    for message in messages:
+        if not _should_index_slack_message(message):
+            continue
+        filter_messages.append({
+            "id": f"{integration.team_id}-{message['ts']}",
+            "text": message["text"],
+            "user_id": message["user"],
+            "team_id": content_store["team_id"],
+            "text_type": "content",
+            "last_updated": datetime.datetime.fromtimestamp(float(message["ts"])).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            ),
+            "source_name": content_store["name"],
+            "source_id": content_store["source_id"],
+            "source_type": "slack_message",
+            "url": f"{content_store['url']}/p{message['ts'].replace('.', '')}"
+            
+        })
+    return filter_messages
+
+
+def extract_data_from_content_store(integration, content_store):
+    type = content_store["type"]
     text = None
-    if type == "notion":
-        text = _get_notion_document_text(token, content_store)
-    elif type == "drive#file|application/pdf":
-        text = _get_gdrive_pdf_document_text(token, content_store)
-    elif type == "drive#file|application/vnd.google-apps.document":
-        text = _get_google_doc_text(token, content_store)
-    elif type == "drive#file|text/plain":
-        text = _get_gdrive_document_text(token, content_store)
-    elif type == "docx" or type == "application/pdf":
-        text = _get_slack_pdf_document_text(token, content_store)
+    team_id = content_store["team_id"]
+    user_id = content_store["user_id"]
+    try:
+        if type == "slack_channel":
+            return _get_slack_channel_messages(integration, content_store)
+        elif type == "notion":
+            text = _get_notion_document_text(integration, content_store)
+        elif type == "drive#file|application/pdf":
+            text = _get_gdrive_pdf_document_text(integration, content_store)
+        elif type == "drive#file|application/vnd.google-apps.document":
+            text = _get_google_doc_text(integration, content_store)
+        elif type == "drive#file|text/plain":
+            text = _get_gdrive_document_text(integration, content_store)
+        elif type == "slack|docx" or type == "slack|application/pdf":
+            text = _get_slack_pdf_document_text(integration, content_store)
+        elif type == "text/plain":
+            text = _get_slack_txt_document_text(integration, content_store)
+        else:
+            return []
+    except Exception as e:
+        logger.error(e)
+    if not text:
+        return []
+    split_text = []
+    chunks = re.split(REGEX_EXP, text)
+    for idx, chunk in enumerate(chunks):
+        split_text.append({
+            "id": f"{team_id}-{content_store['source_id']}-{idx}",
+            "text": chunk,
+            "user_id": user_id,
+            "team_id": content_store["team_id"],
+            "text_type": f"content",
+            "last_updated": content_store["source_last_updated"],
+            "source_name": content_store["name"],
+            "source_id": content_store["source_id"],
+            "source_type": type,
+            "url": content_store["url"]
+        })
+    split_text.append({
+        "id": f"{team_id}-{content_store['source_id']}",
+        "text": content_store["name"],
+        "user": user_id,
+        "team": content_store["team_id"],
+        "text_type": f"title",
+        "last_updated": content_store["source_last_updated"],
+        "source_name": content_store["name"],
+        "source_id": content_store["source_id"],
+        "source_type": type,
+        "url": content_store["url"]
+    })
+    return split_text
+    
     

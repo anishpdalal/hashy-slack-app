@@ -12,5 +12,12 @@ setup(
         "pydantic",
         "SQLAlchemy",
         "sqlalchemy-utils",
+        "google-api-python-client",
+        "google-auth",
+        "google-auth-oauthlib",
+        "google-auth-httplib2",
+        "slack-bolt",
+        "pdfminer.six",
+        "requests"
     ]
 )

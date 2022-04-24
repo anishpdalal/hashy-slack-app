@@ -49,30 +49,18 @@ def get_content_store(source_id: str):
         return content
 
 
-def get_most_recent_slack_content_store(channel_id: str):
+def get_all_integrations():
     with Session() as db:
-        content = db.query(ContentStore).filter(
-            ContentStore.user_ids.any(channel_id),
-            ContentStore.type == "slack_thread"
-        ).order_by(ContentStore.source_last_updated.desc()).first()
-        return content
-
-
-def get_user_integrations(team_id:str, user_id: str):
-    with Session() as db:
-        integrations = db.query(Integration).filter(
-            Integration.team_id == team_id,
-            Integration.user_id == user_id,
-        ).all()
+        integrations = db.query(Integration).order_by(
+                Integration.updated.asc()
+            ).all()
         return integrations
 
 
-def get_slack_integration(team_id: str):
-    bot = installation_store.find_bot(
-        enterprise_id=None,
-        team_id=team_id,
-    )
-    return bot
+def get_integration(id: int):
+    with Session() as db:
+        integration = db.query(Integration).filter(Integration.id == id).first()
+        return integration
 
 
 def create_content_store(content: dict):
@@ -111,3 +99,7 @@ def update_integration(id: int, fields: dict):
             raise
         else:
             db.commit()
+
+
+def dispose_engine():
+    engine.dispose()
