@@ -1,9 +1,9 @@
-from setuptools import setup
+from setuptools import find_packages, setup
 
 setup(
     name="core",
     version="0.1.0",
-    packages=["core"],
+    packages=find_packages(include=["core", "core"]),
     python_requires=">=3.8",
     install_requires=[
         "psycopg2-binary",
@@ -15,7 +15,7 @@ setup(
         "google-auth",
         "google-auth-oauthlib",
         "google-auth-httplib2",
-        "slack-bolt",
+        "slack-sdk",
         "pdfminer.six",
         "requests"
     ]
