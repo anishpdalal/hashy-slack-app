@@ -39,10 +39,12 @@ def handler(event, context):
         integration = crud.get_integration(integration_id)
         data = reader.extract_data_from_content_store(integration, content_store)
         text = [d["text"] for d in data]
+        if not text:
+            continue
         embeddings = search_model.encode(text).tolist()
         source_id = content_store["source_id"]
         content_store_db = crud.get_content_store(source_id)
-        num_vectors = content_store_db.num_vectors
+        num_vectors = content_store_db.num_vectors if content_store_db else 0
         user_id = content_store["user_id"]
         source_id = content_store["source_id"]
         content_store_type = content_store["type"]

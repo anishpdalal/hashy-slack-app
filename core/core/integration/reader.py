@@ -112,7 +112,7 @@ def _get_gdrive_docs(integration):
             "team_id": integration.team_id,
             "user_id": integration.user_id,
             "url": f"https://drive.google.com/file/d/{source_id}",
-            "type": f"drive#file|{result['mimeType']}",
+            "type": f"drive#file|{file['mimeType']}",
             "name": file["name"],
             "source_id": source_id,
             "source_last_updated": file["modifiedTime"]
@@ -143,7 +143,7 @@ def _get_slack_channels(integration):
     for channel in channels:
         channel_id = channel["id"]
         source_last_updated = None
-        latest_reply = client.conversations_replies(channel=channel_id, limit=1)
+        latest_reply = client.conversations_history(channel=channel_id, limit=1)
         if "messages" in latest_reply and len(latest_reply["messages"]) == 1:
             source_last_updated = latest_reply["messages"][0]["ts"]
         result["content_stores"].append(
@@ -359,18 +359,18 @@ def _get_slack_channel_messages(integration, content_store):
     channel_id = content_store["source_id"]
     last_updated = content_store["source_last_updated"]
     if last_updated:
-        messages = client.conversations_replies(
+        messages = client.conversations_history(
             channel=channel_id,
             oldest=last_updated,
             inclusive=False
         )["messages"]
     else:
         messages = []
-        replies = client.conversations_replies(channel=channel_id, limit=1000)
+        replies = client.conversations_history(channel=channel_id, limit=1000)
         messages.extend(replies.get("messages", []))
         next_cursor = replies["response_metadata"]["next_cursor"]
         while next_cursor:
-            replies = client.conversations_replies(channel=channel_id, limit=1000, cursor=next_cursor)
+            replies = client.conversations_history(channel=channel_id, limit=1000, cursor=next_cursor)
             messages.extend(replies.get("messages", []))
             next_cursor = replies["response_metadata"]["next_cursor"]
     filter_messages = []
@@ -400,25 +400,22 @@ def extract_data_from_content_store(integration, content_store):
     text = None
     team_id = content_store["team_id"]
     user_id = content_store["user_id"]
-    try:
-        if type == "slack_channel":
-            return _get_slack_channel_messages(integration, content_store)
-        elif type == "notion":
-            text = _get_notion_document_text(integration, content_store)
-        elif type == "drive#file|application/pdf":
-            text = _get_gdrive_pdf_document_text(integration, content_store)
-        elif type == "drive#file|application/vnd.google-apps.document":
-            text = _get_google_doc_text(integration, content_store)
-        elif type == "drive#file|text/plain":
-            text = _get_gdrive_document_text(integration, content_store)
-        elif type == "slack|docx" or type == "slack|application/pdf":
-            text = _get_slack_pdf_document_text(integration, content_store)
-        elif type == "text/plain":
-            text = _get_slack_txt_document_text(integration, content_store)
-        else:
-            return []
-    except Exception as e:
-        logger.error(e)
+    if type == "slack_channel":
+        return _get_slack_channel_messages(integration, content_store)
+    elif type == "notion":
+        text = _get_notion_document_text(integration, content_store)
+    elif type == "drive#file|application/pdf":
+        text = _get_gdrive_pdf_document_text(integration, content_store)
+    elif type == "drive#file|application/vnd.google-apps.document":
+        text = _get_google_doc_text(integration, content_store)
+    elif type == "drive#file|text/plain":
+        text = _get_gdrive_document_text(integration, content_store)
+    elif type == "slack|docx" or type == "slack|application/pdf":
+        text = _get_slack_pdf_document_text(integration, content_store)
+    elif type == "text/plain":
+        text = _get_slack_txt_document_text(integration, content_store)
+    else:
+        return []
     if not text:
         return []
     split_text = []

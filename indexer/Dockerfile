@@ -23,9 +23,9 @@ ENV PATH="/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 RUN mkdir -p /function
 
 COPY ./requirements.txt /function/requirements.txt
-COPY ./dist/core-0.1.0-py3-none-any.whl /function/core-0.1.0-py3-none-any.whl
 RUN python3 -m pip install pip --upgrade
 RUN python3 -m pip install --no-cache-dir --upgrade -r /function/requirements.txt
+COPY ./dist/core-0.1.0-py3-none-any.whl /function/core-0.1.0-py3-none-any.whl
 RUN python3 -m pip install --no-cache-dir /function/core-0.1.0-py3-none-any.whl
 
 COPY app.py /function

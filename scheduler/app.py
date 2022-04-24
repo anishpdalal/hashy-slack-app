@@ -1,5 +1,6 @@
 import datetime
 import itertools
+import json
 import logging
 import os
 
@@ -39,11 +40,11 @@ def handler(event, context):
             type = content_store["type"]
             last_updated = content_store["source_last_updated"]
             source_id = content_store["source_id"]
-            if type == "slack":
+            if type == "slack_channel":
                 last_updated = pytz.utc.localize(
                     datetime.datetime.fromtimestamp(
                         float(last_updated)
-                    ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                    )
                 )
             else:
                 last_updated = pytz.utc.localize(
@@ -53,12 +54,16 @@ def handler(event, context):
                     )
                 )
             content_store_db = crud.get_content_store(source_id)
-            last_updated_in_db = content_store_db.updated or content_store_db.created
-            if last_updated_in_db > last_updated:
-                continue
+            if content_store_db:
+                last_updated_in_db = content_store_db.updated or content_store_db.created
+                if last_updated_in_db > last_updated:
+                    continue
             content_store["integration_id"] = integration.id
-            content_store["source_last_updated"] = last_updated_in_db.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-            upserts.append(content_store)
+            content_store["source_last_updated"] = last_updated.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            upserts.append({
+                "MessageBody": json.dumps(content_store),
+                "Id": content_store["source_id"]
+            })
     
     logger.info(f"Upserting {len(upserts)} docs")
     for chunk in chunks(upserts, batch_size=10):
