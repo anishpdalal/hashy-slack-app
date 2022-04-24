@@ -130,7 +130,7 @@ def _get_slack_channels(integration):
     channels = []
     public_channels = client.conversations_list(type="public_channel", limit=1000)
     channels.extend(public_channels.get("channels", []))
-    next_cursor = public_channels["response_metadata"]["next_cursor"]
+    next_cursor = public_channels.get("response_metadata", {}).get("next_cursor")
     while next_cursor:
         public_channels = client.conversations_list(
             type="public_channel",
@@ -138,7 +138,7 @@ def _get_slack_channels(integration):
             cursor=next_cursor
         )
         channels.extend(public_channels.get("channels", []))
-        next_cursor = public_channels["response_metadata"]["next_cursor"]
+        next_cursor = public_channels.get("response_metadata", {}).get("next_cursor")
     channels = [channel for channel in channels if channel["is_member"]]
     for channel in channels:
         channel_id = channel["id"]
@@ -366,13 +366,13 @@ def _get_slack_channel_messages(integration, content_store):
         )["messages"]
     else:
         messages = []
-        replies = client.conversations_history(channel=channel_id, limit=1000)
-        messages.extend(replies.get("messages", []))
-        next_cursor = replies["response_metadata"]["next_cursor"]
+        conversations = client.conversations_history(channel=channel_id, limit=1000)
+        messages.extend(conversations.get("messages", []))
+        next_cursor = conversations.get("response_metadata", {}).get("next_cursor")
         while next_cursor:
-            replies = client.conversations_history(channel=channel_id, limit=1000, cursor=next_cursor)
-            messages.extend(replies.get("messages", []))
-            next_cursor = replies["response_metadata"]["next_cursor"]
+            conversations = client.conversations_history(channel=channel_id, limit=1000, cursor=next_cursor)
+            messages.extend(conversations.get("messages", []))
+            next_cursor = conversations.get("response_metadata", {}).get("next_cursor")
     filter_messages = []
     for message in messages:
         if not _should_index_slack_message(message):
