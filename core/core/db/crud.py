@@ -5,7 +5,7 @@ from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallation
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from models import ContentStore, SlackUser, Integration
+from .models import ContentStore, SlackUser, Integration
 
 
 user = os.environ["POSTGRES_USER"]
