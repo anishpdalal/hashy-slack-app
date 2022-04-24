@@ -8,7 +8,7 @@ import pinecone
 import pytz
 from sentence_transformers import SentenceTransformer
 
-from core.core.integration import content
+from core.core.integration import reader
 from core.core.db import crud
 
 logger = logging.getLogger()
@@ -37,7 +37,7 @@ def handler(event, context):
         logger.info(record['body'])
         integration_id = content_store["integration_id"]
         integration = crud.get_integration(integration_id)
-        data = content.extract_data_from_content_store(integration, content_store)
+        data = reader.extract_data_from_content_store(integration, content_store)
         text = [d["text"] for d in data]
         embeddings = search_model.encode(text).tolist()
         source_id = content_store["source_id"]

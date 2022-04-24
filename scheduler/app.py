@@ -6,7 +6,7 @@ import os
 import boto3
 import pytz
 
-from core.core.integration import content
+from core.core.integration import reader
 from core.core.db import crud
 
 logger = logging.getLogger()
@@ -31,7 +31,7 @@ def handler(event, context):
     for integration in integrations:
         if len(upserts) > UPSERT_LIMIT:
             break
-        result = content.list_content_stores(integration)
+        result = reader.list_content_stores(integration)
         cursor = result["cursor"]
         crud.update_integration(integration.id, {"last_cursor": cursor})
         content_stores = result["content_stores"]
