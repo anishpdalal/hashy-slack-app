@@ -419,9 +419,9 @@ def extract_data_from_content_store(integration, content_store):
         text = _get_google_doc_text(integration, content_store)
     elif type == "drive#file|text/plain":
         text = _get_gdrive_document_text(integration, content_store)
-    elif type == "slack|docx" or type == "slack|application/pdf":
+    elif type == "slack|application/vnd.openxmlformats-officedocument.wordprocessingml.document" or type == "slack|application/pdf":
         text = _get_slack_pdf_document_text(integration, content_store)
-    elif type == "text/plain":
+    elif type == "slack|text/plain":
         text = _get_slack_txt_document_text(integration, content_store)
     else:
         return []

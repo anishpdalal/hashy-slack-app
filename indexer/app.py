@@ -39,18 +39,22 @@ def handler(event, context):
         team_id = content_store["team_id"]
         source_id = content_store["source_id"]
         content_store_type = content_store["type"]
-        integration_id = content_store["integration_id"]
+        content_store_db = None
         source_last_updated = pytz.utc.localize(datetime.datetime.strptime(
             content_store["source_last_updated"],
             "%Y-%m-%dT%H:%M:%S.%fZ"
         )),
-        content_store_db = crud.get_content_store(source_id)
-        integration = crud.get_integration(integration_id)
-        if content_store_type == "slack_channel" and content_store_db:
-            db_last_updated = content_store_db.updated or content_store_db.created
-            content_store["source_last_updated"] = db_last_updated.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        data = reader.extract_data_from_content_store(integration, content_store)
-        text = [d["text"] for d in data]
+        if content_store_type == "answer":
+            text = [content_store["text"]]
+        else: 
+            integration_id = content_store["integration_id"]
+            content_store_db = crud.get_content_store(source_id)
+            integration = crud.get_integration(integration_id)
+            if content_store_type == "slack_channel" and content_store_db:
+                db_last_updated = content_store_db.updated or content_store_db.created
+                content_store["source_last_updated"] = db_last_updated.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            data = reader.extract_data_from_content_store(integration, content_store)
+            text = [d["text"] for d in data]
         if not text:
             continue
         embeddings = search_model.encode(text).tolist()
@@ -62,11 +66,11 @@ def handler(event, context):
                 "source_id": source_id,
                 "user_ids": [user_id] if user_id else None,
                 "source_last_updated": source_last_updated,
-                "num_vectors": len(data)
+                "num_vectors": len(text)
             }
             crud.create_content_store(content)
         else:
-            new_num_vectors = len(data) + num_vectors if content_store_type == "slack_channel" else len(data)
+            new_num_vectors = len(text) + num_vectors if content_store_type == "slack_channel" else len(text)
             content = {
                 "num_vectors": new_num_vectors,
                 "source_last_updated": source_last_updated

@@ -52,3 +52,4 @@ class Integration(Base):
     )
     updated = Column(DateTime(timezone=True), onupdate=func.now())
     last_cursor = Column(String)
+    extra = Column(String)

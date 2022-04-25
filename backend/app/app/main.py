@@ -1,8 +1,10 @@
 import base64
+import datetime
 import itertools
 import json
 import logging
 import os
+import uuid
 
 import boto3
 from fastapi import FastAPI, Request
@@ -16,7 +18,7 @@ from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallation
 from slack_sdk.web import WebClient
 from slack_sdk.errors import SlackApiError
 
-from app.db import crud, database, schemas
+from core.db import crud
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 installation_store = SQLAlchemyInstallationStore(
     client_id=os.environ["SLACK_CLIENT_ID"],
-    engine=database.engine
+    engine=crud.engine
 )
 
 installation_store.create_tables()
@@ -60,17 +62,39 @@ def handle_file_created_events(client, event, say):
     pass
 
 
-@app.event({
-    "type": "message",
-    "subtype": "message_deleted"
-})
+@app.event({"type": "message", "subtype": "message_deleted"})
 def handle_message_deleted(event, say):
     pass
 
 
-@app.event({
-    "type": "message",
-})
+@app.event({"type": "message", "subtype": "file_share"})
+def handle_message_file_share(logger, event, say):
+    for file in event["files"]:
+        mimetype = file["mimetype"]
+        file_id = file["id"]
+        user_id = file["user"]
+        converted_pdf = file.get("converted_pdf")
+        url = file["url_private"] if converted_pdf is None else converted_pdf
+        file_name = file["name"]
+        team_id = url.split("/")[4].split("-")[0]
+        timestamp = file["timestamp"]
+        message = {
+            "team_id": team_id,
+            "user_id": user_id,
+            "url": url,
+            "type": f"slack|{mimetype}",
+            "name": file_name,
+            "source_id": file_id,
+            "source_last_updated": datetime.datetime.fromtimestamp(timestamp).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            )
+        }
+        logger.info(message)
+        say(f"Processing File {file_name}")
+        queue.send_message(MessageBody=json.dumps(message))
+
+
+@app.event({"type": "message"})
 def handle_message_channel(event, say, client):
     if event.get("channel_type") == "channel" and not event.get("parent_user_id"):
         channel = event["channel"]
@@ -113,36 +137,6 @@ def handle_message_channel(event, say, client):
 		            }
                 ]
                 client.chat_postMessage(channel=channel, thread_ts=ts, blocks=blocks)
-
-
-
-@app.event({
-    "type": "message",
-    "subtype": "file_share"
-})
-def handle_message_file_share(event, say):
-    for file in event["files"]:
-        mimetype = file["mimetype"]
-        filetype = file["filetype"]
-        file_id = file["id"]
-        user = file["user"]
-        converted_pdf = file.get("converted_pdf")
-        url = file["url_private"] if converted_pdf is None else converted_pdf
-        file_name = file["name"]
-        team = url.split("/")[4].split("-")[0]
-        message = {
-            "mimetype": mimetype,
-            "filetype": filetype,
-            "file_id": file_id,
-            "user": user,
-            "converted_pdf": converted_pdf,
-            "url": url,
-            "file_name": file_name,
-            "team": team
-        }
-        logger.info(message)
-        say(f"Processing File {file_name}")
-        queue.send_message(MessageBody=json.dumps(message))
 
 
 @app.action("view_more_button")
@@ -227,24 +221,23 @@ def handle_submit_answer_view(ack, body, client, view):
     answer = view["state"]["values"]["save_answer"]["save_answer"]["value"]
     selected_conversations = view["state"]["values"]["ask_teammate"]["ask_teammate"]["selected_conversations"]
     if answer:
-        query = {
-            "team": team,
-            "user": user,
+        message = {
+            "team_id": team,
+            "user_id": user,
+            "type": "answer",
+            "source_id": str(uuid.uuid4()),
+            "source_last_updated": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "text": text,
-            "result": answer
+            "answer": answer
         }
-        requests.post(
-            f"{os.environ['API_URL']}/create-answer",
-            data=json.dumps(query)
-        )
+        queue.send_message(MessageBody=json.dumps(message))
         client.chat_postMessage(
             channel=user,
-            text="Successfully contributed an answer!"
+            text=f"Successfully saved answer to {text}"
         )
-    db = database.SessionLocal()
     for id in selected_conversations:
-        logged_user = crud.get_logged_user(db, id)
-        if logged_user:
+        slack_user = crud.get_slack_user(team, user)
+        if slack_user:
             msg = f"{user_name} has requested your help. Please enter `/hashy {text}` and provide an answer to the question. Thanks!"
         else:
             msg = f"{user_name} has requested your help. Please install the Hashy Slack app and enter `/hashy {text}` to provide an answer to the question. Thanks!"
@@ -255,124 +248,7 @@ def handle_submit_answer_view(ack, body, client, view):
                 channel_name = client.conversations_info(channel=id)["channel"]["name"]
                 msg = f"The channel {channel_name} couldn't receive your question. Invite Hashy to the channel and ask again!"
                 client.chat_postMessage(channel=user, text=msg)
-    db.close()
 
-
-@app.view("delete_answer_view")
-def handle_delete_answer_view(ack, body, client, view):
-    ack()
-    query_ids = [opt["value"] for opt in view["state"]["values"]["delete_answers"]["delete_answers"]["selected_options"]]
-    team = body["team"]["id"]
-    user = body["user"]["id"]
-    requests.post(
-        f"{os.environ['API_URL']}/delete-answers",
-        data=json.dumps({"team": team, "user": user, "query_ids": query_ids})
-    )
-    msg = "answers" if len(query_ids) > 1 else "answer"
-    client.chat_postMessage(
-        channel=user,
-        text=f"Successfully deleted {len(query_ids)} {msg}!"
-    )
-
-
-def parse_summary(summary):
-    if type(summary) == list:
-        results = []
-        results.append(" | ".join(list(summary[0].keys())))
-        values = [" | ".join([str(val) for val in res.values()]) for res in summary]
-        results.extend(values)
-        return "\n".join(results)[0:3000]
-    else:
-        return summary
-
-
-@app.action("increment_count")
-def handle_some_action(ack, body, logger, client):
-    ack()
-    query_id = body["actions"][0]["value"]
-    db = database.SessionLocal()
-    query = crud.get_query(db, query_id)
-    if query:
-        upvotes = query.upvotes or 0
-        voters = query.voters or []
-        if body["user"]["id"] not in voters:
-            voters.append(body["user"]["id"])
-            voters = list(set(voters))
-            crud.update_query(db, query_id, {"upvotes": upvotes + 1, "voters": voters})
-            db.commit()
-            for block in body["view"]["blocks"]:
-                if block["block_id"] == query_id:
-                    block["accessory"]["text"]["text"] = f":arrow_up: ({upvotes + 1})"
-            client.views_update(
-                hash=body["view"]["hash"],
-                view_id=body["view"]["id"],
-                view={
-                    "callback_id": body["view"]["callback_id"],
-                    "type": body["view"]["type"],
-                    "title": body["view"]["title"],
-                    "blocks": body["view"]["blocks"],
-                    "private_metadata": body["view"]["private_metadata"],
-                    "submit": body["view"]["submit"],
-                    "close": body["view"]["close"],
-                    "clear_on_close": body["view"]["clear_on_close"]
-                }
-            )
-    db.close()
-
-
-
-@app.action("report_click")
-def handle_report_click(ack, body, client):
-    ack()
-    trigger_id = body["trigger_id"]
-    user = body["user"]["id"]
-    team = body["team"]["id"]
-    ts = body["message"]["ts"]
-    block_id = body["actions"][0]["block_id"]
-    block_messages = body["message"]["blocks"]
-    idx = block_messages.index(next(filter(lambda n: n.get("block_id") == block_id, block_messages)))
-    question_block = block_messages[idx - 3]
-    question = question_block["text"]["text"].split("Question/Topic: ")[1]
-    value = block_messages[idx]["elements"][0]["value"]
-    blocks = [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"Query: {question}"
-            }
-	    },
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": value
-            }
-	    }
-    ]
-    client.views_open(
-        trigger_id=trigger_id,
-        view={
-            "type": "modal",
-            "title": {
-                "type": "plain_text",
-                "text": f"Takeaways",
-                "emoji": True
-            },
-            "blocks": blocks,
-            "close": {
-                "type": "plain_text",
-                "text": "Close",
-                "emoji": True
-            },
-            "clear_on_close": True
-        },
-    )
-    requests.post(
-        f"{os.environ['API_URL']}/log-event",
-        data=json.dumps({"team": team, "query": question, "user": user, "type": "REPORT_CLICK", "ts": ts})
-    )
-        
 
 def answer_query(event, query, type=None):
     team = event["team"]
@@ -574,7 +450,6 @@ def handle_view_events(ack, body, client, view):
     integration, channel = integration.split("-")
     user = body["user"]["id"]
     team = body["team"]["id"]
-    db = database.SessionLocal()
     if integration.startswith("notion"):
         notion_id = os.environ["NOTION_CLIENT_ID"]
         redirect_uri = os.environ["NOTION_REDIRECT_URI"]
@@ -582,12 +457,11 @@ def handle_view_events(ack, body, client, view):
     else:
         google_redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
         google_client_id = os.environ["GOOGLE_CLIENT_ID"]
-        token = crud.get_google_token(db, user)
-        if not token or not token.encrypted_token:
+        gdrive_integration = crud.get_user_integration(team, user, "gdrive")
+        if not gdrive_integration or not gdrive_integration.token:
             msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&prompt=consent&include_granted_scopes=true&response_type=code&state={user}-{team}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
         else:
             msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
-    db.close()
     ack()
     client.chat_postMessage(channel=channel, text=msg)
 
@@ -599,16 +473,16 @@ def contribute_answer_view(ack, body, client, view):
     user = body["user"]["id"]
     team = body["team"]["id"]
     ack()
-    query = {
-        "team": team,
-        "user": user,
+    message = {
+        "team_id": team,
+        "user_id": user,
+        "type": "answer",
+        "source_id": str(uuid.uuid4()),
+        "source_last_updated": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "text": question,
-        "result": answer
+        "answer": answer
     }
-    requests.post(
-        f"{os.environ['API_URL']}/create-answer",
-        data=json.dumps(query)
-    )
+    queue.send_message(MessageBody=json.dumps(message))
     client.chat_postMessage(channel=user, text=f"Successfully saved answer to {question}")
 
 
@@ -697,13 +571,6 @@ def help_command(ack, respond, command, client):
                     "text": {
                         "type": "mrkdwn",
                         "text": f"To search or contribute answer to query, enter `/hashy <your query here>`"
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"To delete an answer, enter `/hashy delete`"
                     }
                 },
                 {
@@ -810,86 +677,6 @@ def help_command(ack, respond, command, client):
                 }
             }
         )
-    elif command_text == "delete":
-        response = requests.post(
-            f"{os.environ['API_URL']}/list-answers",
-            data=json.dumps({"team": team, "user": user})
-        ).json()
-        options = [
-            {
-                "text": {
-                    "type": "plain_text",
-                    "text": res["answer"][0:70],
-                    "emoji": True
-                },
-                "value": res["query_id"]
-            } for res in response
-        ]
-        if len(options) > 0:
-            client.views_open(
-                trigger_id=command["trigger_id"],
-                view={
-                    "callback_id": "delete_answer_view",
-                    "type": "modal",
-                    "blocks": [{
-                        "block_id": "delete_answers",
-                        "type": "input",
-                        "element": {
-                            "type": "multi_static_select",
-                            "placeholder": {
-                                "type": "plain_text",
-                                "text": "Select answers",
-                                "emoji": True
-                            },
-                            "options": options,
-                            "action_id": "delete_answers",
-                        },
-                        "label": {
-                            "type": "plain_text",
-                            "text": "Select answers to delete",
-                            "emoji": True
-                        }
-                    }],
-                    "title": {
-                        "type": "plain_text",
-                        "text": "Delete Answers",
-                        "emoji": True
-                    },
-                    "submit": {
-                        "type": "plain_text",
-                        "text": "Submit",
-                        "emoji": True
-                    },
-                    "close": {
-                        "type": "plain_text",
-                        "text": "Cancel",
-                        "emoji": True
-                    }
-                }
-            )
-        else:
-            client.views_open(
-                trigger_id=command["trigger_id"],
-                view={
-                    "type": "modal",
-                    "blocks": [
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "You do not have any saved answers",
-                                "emoji": True
-                            }
-		                }
-                    ],
-                    "title": {
-                        "type": "plain_text",
-                        "text": "Delete Answers",
-                        "emoji": True
-                    },
-                    "clear_on_close": True
-                }
-            )
     else:
         event = {
             "team": team,
@@ -1003,45 +790,17 @@ def help_command(ack, respond, command, client):
 @app.event("app_home_opened")
 def handle_app_home_opened(client, event, say):
     user_id = event["user"]
-    db = database.SessionLocal()
-    try:
-        logged_user = crud.get_logged_user(db, user_id)
-        if logged_user is None:
-            result = client.users_info(
-                user=user_id
-            )
-            team_id = result["user"]["team_id"]
-            team_info = client.team_info(
-                team=team_id
-            )
-            team_name = team_info["team"]["name"]
-            user = crud.create_logged_user(
-                db, schemas.LoggedUserCreate(
-                    user_id=user_id,
-                    team_id=team_id,
-                    team_name=team_name
-                )
-            )
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-            say(f":wave: Hi <@{result['user']['name']}>, Welcome to the Hashy app on Slack! Hashy lets you quickly find and share knowledge across your org.\n"
-                "Here's how to get started :point_down:\n\n"
-                f"1. Think of a question you get asked all the time. Type in `/hashy <your question here>` and enter your answer\n"
-                "Users tend to answer with written explanations or links to documents/videos/web pages.\n\n"
-                f"2. Congrats! Your team can get your answer from Hashy rather than directly asking you all the time :smile:.\n"
-                "The next time someone asks the same query, they'll see the answer you provided. Go ahead and try it out!\n\n"
-                f"3. Now think of an important question that someone else knows how to answer. Type in `/hashy <your question here>`\n"
-                "and select the coworker to ask the question to. The coworker will be prompted to enter an answer.\n"
-                "This is how Hashy seamlessly captures knowledge across teams.\n\n"
-                "4. To learn how to get the most out of Hashy, book a 15 min <https://calendly.com/taherhassonjee/hashy-onboarding|Onboarding Call> with us.\n\n"
-                "5. Enter `/hashy help` to learn how to setup integrations and also watch an overview of Hashy.\n\n"
-            )
-    except:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    result = client.users_info(user=user_id)
+    team_id = result["user"]["team_id"]
+    slack_user = crud.get_slack_user(team_id, user_id)
+    if slack_user is None:
+        team_name = result["team"]["name"]
+        crud.create_slack_user({
+            "user_id": user_id,
+            "team_name": team_name,
+            "team_id": team_id
+        })
+        say(f":wave: Hi <@{result['user']['name']}>, Welcome to the Hashy app on Slack! Hashy lets you quickly find and share knowledge across your org.\n")
 
 api = FastAPI()
 
@@ -1084,30 +843,20 @@ async def google_authorize(req: Request, state):
     auth_response = f"https://{auth_response.netloc}{auth_response.path}?{auth_response.query}"
     flow.fetch_token(authorization_response=auth_response)
     credentials = flow.credentials
-    db = database.SessionLocal()
-    try:
-        token = crud.get_google_token(db, user_id)
-        if not token:
-            fields = {
-                "user_id": user_id,
-                "team": team_id,
-                "encrypted_token": credentials.refresh_token
-            }
-            token = crud.create_google_token(fields)
-            db.add(token)
-            db.commit()
-            db.refresh(token)
-        else:
-            if credentials.refresh_token is not None:
-                fields = {}
-                fields["encrypted_token"] = credentials.refresh_token
-                crud.update_google_token(db, token.id, fields)
-                db.commit()
-    except:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    integration = crud.get_user_integration(team_id, user_id, "gdrive")
+    if not integration:
+        fields = {
+            "team_id": team_id,
+            "type": "gdrive",
+            "token": credentials.refresh_token,
+            "user_id": user_id
+        }
+        crud.create_integration(fields)
+    else:
+        if credentials.refresh_token is not None:
+            fields["token"] = credentials.refresh_token
+            crud.update_integration(integration.id, fields)
+
     app_id = os.environ["GOOGLE_APP_ID"]
     key = os.environ["GOOGLE_API_KEY"]
     response = RedirectResponse(f"/google-picker/{credentials.token}?team={team_id}&user={user_id}&id={app_id}&key={key}")
@@ -1173,7 +922,8 @@ async def google_picker(token, team, user, id, key):
                         files.push({
                             "file_id": data.docs[i].id,
                             "file_name": data.docs[i].name,
-                            "mime_type": data.docs[i].mimeType
+                            "mime_type": data.docs[i].mimeType,
+                            "source_last_updated": data.docs[i].modifiedTime
                         });
                     }
                     var xmlhttp = new XMLHttpRequest();
@@ -1212,7 +962,7 @@ def chunks(iterable, batch_size=10):
 
 
 @api.post("/google/process-documents")
-def process_google_documents(upload: schemas.GooglePickerUpload):
+def process_google_documents(upload):
     user_id = upload.user
     team_id = upload.team
     files_to_upload = [
@@ -1220,12 +970,13 @@ def process_google_documents(upload: schemas.GooglePickerUpload):
             "Id": file["file_id"],
             "MessageBody": json.dumps(
                 {
-                    "team": team_id,
-                    "user": user_id,
+                    "team_id": team_id,
+                    "user_id": user_id,
                     "url": f"https://drive.google.com/file/d/{file['file_id']}",
-                    "filetype": f"drive#file|{file['mime_type']}",
-                    "file_name": file["file_name"],
-                    "file_id": file["file_id"]
+                    "type": f"drive#file|{file['mime_type']}",
+                    "name": file["file_name"],
+                    "source_id": file["file_id"],
+                    "source_last_updated": file["source_last_updated"],
                 }
             )
         } for file in upload.files
@@ -1264,43 +1015,29 @@ async def notion_oauth_redirect(code, state):
         )
     )
     token_response = token_response.json()
-    db = database.SessionLocal()
-    try:
-        user_id, team_id = state.split("-")
-        notion_user_id = token_response["owner"]["user"]["id"]
-        access_token = token_response["access_token"]
-        bot_id = token_response["bot_id"]
-        workspace_id = token_response["workspace_id"]
-        fields = {
-            "user_id": user_id,
-            "team": team_id,
-            "notion_user_id": notion_user_id,
-            "encrypted_token": access_token,
-            "bot_id": bot_id,
-            "workspace_id": workspace_id
-        }
-        token = crud.get_notion_token(db, user_id)
-        if token:
-            crud.update_notion_token(db, token.id, fields)
-            db.commit()
-        else:
-            token = crud.create_notion_token(schemas.NotionTokenCreate(**fields))
-            db.add(token)
-            db.commit()
-            db.refresh(token)
-    except:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-    
-    lambda_client = boto3.client("lambda", region_name="us-east-1")
-    payload = {"team": team_id, "user": user_id}
-    lambda_client.invoke(
-        FunctionName=os.environ["LAMBDA_FUNCTION"],
-        InvocationType="Event",
-        Payload=json.dumps(payload)
-    )
+    user_id, team_id = state.split("-")
+    notion_user_id = token_response["owner"]["user"]["id"]
+    bot_id = token_response["bot_id"]
+    workspace_id = token_response["workspace_id"]
+    access_token = token_response["access_token"]
+    extra = json.dumps({
+        "notion_user_id": notion_user_id,
+        "bot_id": bot_id,
+        "workspace_id": workspace_id
+    })
+    fields = {
+        "team_id": team_id,
+        "type": "notion",
+        "token": access_token,
+        "user_id": user_id,
+        "extra": extra
+    }
+    integration = crud.get_user_integration(team_id, user_id, "notion")
+    if integration:
+        crud.update_integration(integration.id, fields)
+    else:
+        crud.create_integration(fields)
+
     bot = installation_store.find_bot(
         enterprise_id=None,
         team_id=team_id,
@@ -1308,7 +1045,8 @@ async def notion_oauth_redirect(code, state):
     client = WebClient(token=bot.bot_token)
     client.chat_postMessage(
         channel=user_id,
-        text="Integrating notion documents. It may take up to a few hours to complete processing."
+        text="Integrating your notion documents! It may take up to a few hours to process all of them. Once "
+        "they are ready we'll send you a message to notify you."
     )
     response = RedirectResponse(f"https://app.slack.com/client/{team_id}")
     return response

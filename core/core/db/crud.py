@@ -108,6 +108,16 @@ def get_integration(id: int):
         return integration
 
 
+def get_user_integration(team_id: str, user_id: str, type: str):
+    with Session() as db:
+        integration = db.query(Integration).filter(
+            Integration.team_id == team_id,
+            Integration.user_id == user_id,
+            Integration.type == type,
+        ).first()
+        return integration
+
+
 def create_integration(integration: dict):
     with Session() as db:
         try:
