@@ -9,7 +9,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-import pdfminer
+import pdfminer.high_level
 import requests
 from slack_sdk.web import WebClient
 
@@ -183,14 +183,18 @@ def _get_slack_txt_document_text(integration, content_store):
 
 
 def _get_slack_pdf_document_text(integration, content_store):
-    url = content_store["url"]
-    headers = {
-        "Authorization": f"Bearer {integration.token}",
-    }
-    byte_str = requests.get(url, headers=headers).content
-    pdf_memory_file = io.BytesIO()
-    pdf_memory_file.write(byte_str)
-    text = pdfminer.high_level.extract_text(pdf_memory_file)
+    text = None
+    try:
+        url = content_store["url"]
+        headers = {
+            "Authorization": f"Bearer {integration.token}",
+        }
+        byte_str = requests.get(url, headers=headers).content
+        pdf_memory_file = io.BytesIO()
+        pdf_memory_file.write(byte_str)
+        text = pdfminer.high_level.extract_text(pdf_memory_file)
+    except Exception as e:
+        logger.error(e)
     return text
 
 
@@ -255,15 +259,19 @@ def _get_notion_document_text(integration, content_store):
 
 
 def _get_gdrive_pdf_document_text(integration, content_store):
-    file_id = content_store["source_id"]
-    service = _get_gdrive_service(integration.token)
-    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
-    fh = io.BytesIO()
-    downloader = MediaIoBaseDownload(fh, request)
-    done = False
-    while done is False:
-        status, done = downloader.next_chunk()
-    text = pdfminer.high_level.extract_text(fh)
+    text = None
+    try:
+        file_id = content_store["source_id"]
+        service = _get_gdrive_service(integration.token)
+        request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+        fh = io.BytesIO()
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while done is False:
+            status, done = downloader.next_chunk()
+        text = pdfminer.high_level.extract_text(fh)
+    except Exception as e:
+        logger.error(e)
     return text
 
 
@@ -359,9 +367,10 @@ def _get_slack_channel_messages(integration, content_store):
     channel_id = content_store["source_id"]
     last_updated = content_store["source_last_updated"]
     if last_updated:
+        oldest = datetime.datetime.strptime(last_updated, "%Y-%m-%dT%H:%M:%S.%fZ").timestamp()
         messages = client.conversations_history(
             channel=channel_id,
-            oldest=last_updated,
+            oldest=str(oldest),
             inclusive=False
         )["messages"]
     else:
@@ -436,8 +445,8 @@ def extract_data_from_content_store(integration, content_store):
     split_text.append({
         "id": f"{team_id}-{content_store['source_id']}",
         "text": content_store["name"],
-        "user": user_id,
-        "team": content_store["team_id"],
+        "user_id": user_id,
+        "team_id": content_store["team_id"],
         "text_type": f"title",
         "last_updated": content_store["source_last_updated"],
         "source_name": content_store["name"],
