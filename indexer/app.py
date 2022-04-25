@@ -81,22 +81,37 @@ def handler(event, context):
                 content["user_ids"] = list(user_ids)
             crud.update_content_store(source_id, content)
         content_store_db = crud.get_content_store(source_id)
-        upsert_data_generator = map(lambda i: (
-            data[i]["id"],
-            embeddings[i],
-            {
-                "text": data[i]["text"],
-                "team_id": data[i]["team_id"],
-                "url": data[i]["url"],
-                "text_type": data[i]["text_type"],
-                "last_updated": data[i]["last_updated"],
-                "source_name": data[i]["source_name"],
-                "source_type": data[i]["source_type"],
-                "url": data[i]["url"],
-                "is_boosted": content_store_db.is_boosted
+        if content_store_type == "answer":
+            upsert_data_generator = map(lambda i: (
+                source_id,
+                embeddings,
+                {
+                    "text": text[0],
+                    "team_id": team_id,
+                    "text_type": "content",
+                    "last_updated": data[i]["last_updated"],
+                    "source_type": content_store_type,
+                    "is_boosted": content_store_db.is_boosted
 
-            }), range(len(data))
-        )
+                }), range(len(data))
+            )
+        else:
+            upsert_data_generator = map(lambda i: (
+                data[i]["id"],
+                embeddings[i],
+                {
+                    "text": data[i]["text"],
+                    "team_id": data[i]["team_id"],
+                    "url": data[i]["url"],
+                    "text_type": data[i]["text_type"],
+                    "last_updated": data[i]["last_updated"],
+                    "source_name": data[i]["source_name"],
+                    "source_type": data[i]["source_type"],
+                    "url": data[i]["url"],
+                    "is_boosted": content_store_db.is_boosted
+
+                }), range(len(data))
+            )
         for ids_vectors_chunk in chunks(upsert_data_generator, batch_size=100):
             index.upsert(vectors=ids_vectors_chunk)
         if num_vectors > len(data):

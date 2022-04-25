@@ -259,16 +259,10 @@ def answer_query(event, query, type=None):
         "query": query
     }))
     
-    if "|" in query:
-        response = requests.post(
-            f"{os.environ['API_URL']}/tabular-search",
-            data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": type})
-        ).json()
-    else:
-        response = requests.post(
-            f"{os.environ['API_URL']}/search",
-            data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": type})
-        ).json()
+    response = requests.post(
+        f"{os.environ['API_URL']}/search",
+        data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": type})
+    ).json()
 
     blocks = []
     sources = list(set([res.get("source") for res in response.get("search_results", [])]))
