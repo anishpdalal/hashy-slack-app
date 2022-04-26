@@ -142,10 +142,12 @@ def _get_slack_channels(integration):
     channels = [channel for channel in channels if channel["is_member"]]
     for channel in channels:
         channel_id = channel["id"]
-        source_last_updated = None
-        latest_reply = client.conversations_history(channel=channel_id, limit=1)
-        if "messages" in latest_reply and len(latest_reply["messages"]) == 1:
-            source_last_updated = latest_reply["messages"][0]["ts"]
+        latest_conversation = client.conversations_history(channel=channel_id, limit=1)
+        if "messages" in latest_conversation and len(latest_conversation["messages"]) == 1:
+            source_last_updated = latest_conversation["messages"][0]["ts"]
+            source_last_updated = datetime.datetime.fromtimestamp(float(source_last_updated)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        else:
+            source_last_updated = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         result["content_stores"].append(
             {
                 "team_id": integration.team_id,

@@ -43,19 +43,12 @@ def handler(event, context):
             content_store_db = crud.get_content_store(source_id)
             if not content_store_db and type == "slack_channel":
                 continue
-            elif type == "slack_channel":
-                last_updated = pytz.utc.localize(
-                    datetime.datetime.fromtimestamp(
-                        float(last_updated)
-                    )
+            last_updated = pytz.utc.localize(
+                datetime.datetime.strptime(
+                    last_updated,
+                    "%Y-%m-%dT%H:%M:%S.%fZ"
                 )
-            else:
-                last_updated = pytz.utc.localize(
-                    datetime.datetime.strptime(
-                        last_updated,
-                        "%Y-%m-%dT%H:%M:%S.%fZ"
-                    )
-                )
+            )
             if content_store_db:
                 last_updated_in_db = content_store_db.updated or content_store_db.created
                 if last_updated_in_db > last_updated:

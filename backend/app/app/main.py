@@ -105,19 +105,28 @@ def handle_message_channel(event, say, client):
         if query and "?" in query and user and team:
             response = requests.post(
                 f"{os.environ['API_URL']}/search",
-                data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": "channel"})
+                data=json.dumps(
+                    {
+                        "team": team,
+                        "query": query,
+                        "user": user,
+                        "count": 10,
+                        "type": "channel"
+                    }
+                )
             ).json()
-            modified_query = response["query"]
-            answer_scores = [res["score"] for res in response.get("answers", [])]
-            max_answer_score = max(answer_scores) if len(answer_scores) else 0
-            if max_answer_score >= 0.60:
-                name = response["answers"][0]["name"]
+            modified_query = response["modified_query"]
+            slack_scores = [res["semantic_score"] for res in response.get("slack_messages_results", [])]
+            max_slack_score = max(slack_scores) if len(slack_scores) else 0
+            if max_slack_score >= 0.50:
+                top_slack_result = response["slack_messages_results"][0]
+                channel_link = f"<{top_slack_result['url']}|{top_slack_result['name']}>"
                 blocks = [
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"Found a related slack message in {name}."
+                            "text": f"Found a related slack message in {channel_link}."
                         }
                     },
                     {
@@ -261,63 +270,66 @@ def answer_query(event, query, type=None):
     
     response = requests.post(
         f"{os.environ['API_URL']}/search",
-        data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": type})
+        data=json.dumps(
+            {
+                "team": team,
+                "query": query,
+                "user": user,
+                "count": 10,
+                "type": type
+            }
+        )
     ).json()
 
+    slack_messages_results = response.get("slack_messages_results", [])
+    content_results = response.get("content_results", [])
+    title_results = response.get("title_results", [])
+    summarized_result = response.get("summarized_result")
+    all_results = slack_messages_results + content_results
+    source_ids = [result["source_id"] for result in content_results + title_results]
+    content_stores = crud.get_content_stores(source_ids) or []
+    content_store_user_mapping = {content_store.source_id: content_store.user_ids for content_store in content_stores}
+    if all_results:
+        top_result = max(slack_messages_results + content_results, key=lambda x: x["semantic_score"])
+        top_score = int(top_result["semantic_score"])  
+        days_old = (datetime.datetime.now() - datetime.datetime.strptime(top_result["last_updated"], "%Y-%m-%dT%H:%M:%S.%fZ")).days
+        freshness_score = top_score + 10 if days_old <= 100 else top_score
+    else:
+        freshness_score = 0
+    slack_integration = crud.get_user_integration(team, user, "slack")
+    gdrive_integration = crud.get_user_integration(team, user, "gdrive")
+    notion_integration = crud.get_user_integration(team, user, "notion")
     blocks = []
-    sources = list(set([res.get("source") for res in response.get("search_results", [])]))
-    query_ids = list(set([res["id"] for res in response.get("answers", [])]))
-    db = database.SessionLocal()
-    doc_user_mapping = crud.get_documents(db, sources)
-    query_upvote_mapping = crud.get_queries(db, query_ids)
-    db.close()
-    max_search_result_score = max([res.get("score", 0) for res in response["search_results"]]) if response.get("search_results", []) else 0
-    max_answer_score = max([res.get("score", 0) for res in response["answers"]]) if response.get("answers", []) else 0
-    score = int(max(max_search_result_score, max_answer_score) * 100)
-    score += min(2, sum([val or 0 for val in query_upvote_mapping.values()])) * 5
-    score = min(100, score) if score > 100 else score
     blocks.append({
         "type": "header",
         "text": {
             "type": "plain_text",
-            "text": f"Knowledge Freshness Score: {score}",
+            "text": f"Knowledge Freshness Score: {freshness_score}",
             "emoji": True
         }
     })
-    if len(query_ids) < 2:
+    if summarized_result and "I don't know" not in summarized_result:
+        blocks.append({
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"Summarized Answer",
+                "emoji": True
+            }
+        })
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "plain_text",
-                    "text": "Increase the score for this topic by contributing a team answer",
+                    "text": summarized_result,
                     "emoji": True
                 }
             }
         )
-    if response.get("summary") and user in doc_user_mapping.get(response["search_results"][0].get("source"), []):
-        if response["summary"] != "Unknown":
-            blocks.append({
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": f"Summarized Answer",
-                    "emoji": True
-                }
-            })
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "plain_text",
-                        "text": parse_summary(response["summary"]),
-                        "emoji": True
-                    }
-                }
-            )
-            blocks.append({"type": "divider"})
+        blocks.append({"type": "divider"})
 
-    if len(response.get("answers", [])) > 0:
+    if slack_messages_results:
         blocks.append({
 			"type": "header",
 			"text": {
@@ -326,54 +338,44 @@ def answer_query(event, query, type=None):
 				"emoji": True
 			}
 		})
-        response["answers"].sort(key=lambda x: query_upvote_mapping.get(x["id"], 0) or 0, reverse=True)
     
-    for idx, result in enumerate(response.get("answers", [])):
+    for idx, result in enumerate(slack_messages_results):
         if idx != 0:
             blocks.append({"type": "divider"})
-        source = result.get("source","")
-        name = result.get("name")
-        result_text = "\n".join(result["result"].split("\n")[0:1])
-        question = result.get("text", "")
-        last_modified = result.get("last_modified", "")
-        source_text = f"<{source}|{name}>" if source else f"{name} on {last_modified}"
-        upvotes = query_upvote_mapping.get(result['id']) or 0
-        blocks.append(
-            {
-                "block_id": result["id"],
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"\n\n_Responding to_: {question}\n\n _Source_: {source_text}\n\n"
-                },
-                "accessory": {
-                    "type": "button",
-                    "text": {
-                        "type": "plain_text",
-                        "text": f":arrow_up: ({upvotes})"
-                    },
-                    "value": result["id"],
-                    "action_id": "increment_count"
-                }
-            }
-        )
-        if result_text:
+        if result["source_type"] == "slack_message":
+            question = result["text"]
+            source = f"<{result['url']}|{result['name']}>"
+            last_updated = result["last_updated"]
             blocks.append(
                 {
+                    "block_id": result["id"],
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": result_text
+                        "text": f"\n\n_Responding to_: {question}\n\n _Source_: {source} on {last_updated}\n\n"
                     }
                 }
             )
-    
-    db = database.SessionLocal()
-    google_token = crud.get_google_token(db, user)
-    notion_token = crud.get_notion_token(db, user)
-    db.close()
-    
-    if len(response["search_results"]) > 0:
+        elif result["source_type"] == "answer":
+            question = result["text"]
+            answer = result["answer"]
+            last_updated = result["last_updated"]
+            source = WebClient(token=slack_integration.token).users_info(user=user)["name"]
+            blocks.append(
+                {
+                    "block_id": result["id"],
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"\n\n_Responding to_: {question}\n\n _Source_: {source} on {last_updated}\n\n _Answer_: {answer}"
+                    }
+                }
+            )
+        else:
+            pass
+
+
+    if content_results:
         blocks.append({
 			"type": "header",
 			"text": {
@@ -382,7 +384,7 @@ def answer_query(event, query, type=None):
 				"emoji": True
 			}
 		})
-        if not google_token and not notion_token:
+        if not gdrive_integration and not notion_integration:
             blocks.append(
                 {
                     "type": "section",
@@ -393,22 +395,30 @@ def answer_query(event, query, type=None):
                 }
             )
     
-    for idx, result in enumerate(response["search_results"]):
-        source = result.get("source","")
-        if user not in doc_user_mapping.get(source, []):
+    for idx, result in enumerate(content_results):
+        if user not in content_store_user_mapping.get(source, []):
             continue
         if idx != 0:
             blocks.append({"type": "divider"})
-        name = result.get("name")
-        result_text = result["result"]
-        last_modified = result.get("last_modified", "")
-        source_text = f"<{source}|{name}>" if source else f"{name} on {last_modified}"
+        name = result["name"]
+        url = result["url"]
+        text = result["text"]
+        last_updated = result["last_updated"]
+        source_type = result["source_type"]
+        if source_type.startswith("notion"):
+            source_type = "(Notion)"
+        elif source_type.startswith("drive"):
+            source_type = "(Google Drive)"
+        else:
+            source_type = ""
+        source = "Notion" if source_type.startswith("notion") else "Google Drive"
+        source_text = f"<{url}|{name}> {source_type} on {last_updated}"
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "plain_text",
-                    "text": f"{result_text}",
+                    "text": text,
                     "emoji": True
                 }
             }
@@ -418,7 +428,7 @@ def answer_query(event, query, type=None):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"\n\n Source: {source_text}"
+                    "text": f"Source: {source_text}"
                 }
             }
         )

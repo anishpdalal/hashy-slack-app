@@ -43,7 +43,7 @@ def handler(event, context):
         source_last_updated = pytz.utc.localize(datetime.datetime.strptime(
             content_store["source_last_updated"],
             "%Y-%m-%dT%H:%M:%S.%fZ"
-        )),
+        ))
         if content_store_type == "answer":
             text = [content_store["text"]]
         else: 
@@ -86,12 +86,14 @@ def handler(event, context):
                 source_id,
                 embeddings,
                 {
-                    "text": text[0],
+                    "text": content_store["text"],
                     "team_id": team_id,
                     "text_type": "content",
-                    "last_updated": data[i]["last_updated"],
+                    "last_updated": content_store["last_updated"],
                     "source_type": content_store_type,
-                    "is_boosted": content_store_db.is_boosted
+                    "source_id": user_id,
+                    "is_boosted": content_store_db.is_boosted,
+                    "answer": content_store["answer"]
 
                 }), range(len(data))
             )
@@ -107,11 +109,30 @@ def handler(event, context):
                     "last_updated": data[i]["last_updated"],
                     "source_name": data[i]["source_name"],
                     "source_type": data[i]["source_type"],
+                    "source_id": data[i]["source_id"],
                     "url": data[i]["url"],
                     "is_boosted": content_store_db.is_boosted
 
                 }), range(len(data))
             )
+        if content_store_type == "slack_channel":
+            for d in data:
+                slack_message_id = d["id"]
+                slack_message_user = d["user_id"]
+                slack_message_last_updated = pytz.utc.localize(datetime.datetime.strptime(
+                    d["last_updated"],
+                    "%Y-%m-%dT%H:%M:%S.%fZ"
+                ))
+                if not crud.get_content_store(source_id):
+                    content = {
+                        "team_id": team_id,
+                        "type": "slack_message",
+                        "source_id": slack_message_id,
+                        "user_ids": [slack_message_user] if slack_message_user else None,
+                        "source_last_updated": slack_message_last_updated,
+                        "num_vectors": 1
+                    }
+                    crud.create_content_store(content)
         for ids_vectors_chunk in chunks(upsert_data_generator, batch_size=100):
             index.upsert(vectors=ids_vectors_chunk)
         if num_vectors > len(data):

@@ -46,7 +46,9 @@ def _search_slack(team, embedding):
                 "text": metadata["text"],
                 "last_updated": metadata["last_updated"].strftime("%m/%d/%Y"),
                 "semantic_score": match["score"],
-                "source_type": metadata["source_type"]
+                "source_type": metadata["source_type"],
+                "answer": metadata.get("answer"),
+                "source_id": metadata["source_id"]
             })
     return results
 
@@ -84,7 +86,8 @@ def _search_documents(team, embedding, text_type="content"):
                 "text": metadata["text"],
                 "last_updated": metadata["last_updated"].strftime("%m/%d/%Y"),
                 "semantic_score": match["score"],
-                "source_type": metadata["source_type"]
+                "source_type": metadata["source_type"],
+                "source_id": metadata["source_id"]
             }) 
     return results
 
@@ -132,10 +135,10 @@ def handler(event, context):
             "content_results": [],
             "title_results": []
         }
-        if search_type == "auto_reply":
+        if search_type == "auto_reply" or search_type == "channel":
             response = openai.Completion.create(
                 engine="text-davinci-002",
-                prompt=f"Summarize the following into a question\n\n{query}",
+                prompt=f"Summarize the following question\n\n{query}",
                 temperature=0,
                 max_tokens=64,
                 top_p=1,
