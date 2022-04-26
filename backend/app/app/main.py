@@ -235,6 +235,7 @@ def handle_submit_answer_view(ack, body, client, view):
             "user_id": user,
             "type": "answer",
             "source_id": str(uuid.uuid4()),
+            "source_name": user_name,
             "source_last_updated": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "text": text,
             "answer": answer
@@ -276,11 +277,10 @@ def answer_query(event, query, type=None):
                 "query": query,
                 "user": user,
                 "count": 10,
-                "type": type
+                "search_type": type
             }
         )
     ).json()
-
     slack_messages_results = response.get("slack_messages_results", [])
     content_results = response.get("content_results", [])
     title_results = response.get("title_results", [])
@@ -291,12 +291,12 @@ def answer_query(event, query, type=None):
     content_store_user_mapping = {content_store.source_id: content_store.user_ids for content_store in content_stores}
     if all_results:
         top_result = max(slack_messages_results + content_results, key=lambda x: x["semantic_score"])
-        top_score = int(top_result["semantic_score"])  
-        days_old = (datetime.datetime.now() - datetime.datetime.strptime(top_result["last_updated"], "%Y-%m-%dT%H:%M:%S.%fZ")).days
+        top_score = int(top_result["semantic_score"] * 100)  
+        days_old = (datetime.datetime.now() - datetime.datetime.strptime(top_result["last_updated"], "%m/%d/%Y")).days
         freshness_score = top_score + 10 if days_old <= 100 else top_score
+        freshness_score = min(freshness_score, 95)
     else:
         freshness_score = 0
-    slack_integration = crud.get_user_integration(team, user, "slack")
     gdrive_integration = crud.get_user_integration(team, user, "gdrive")
     notion_integration = crud.get_user_integration(team, user, "notion")
     blocks = []
@@ -360,14 +360,14 @@ def answer_query(event, query, type=None):
             question = result["text"]
             answer = result["answer"]
             last_updated = result["last_updated"]
-            source = WebClient(token=slack_integration.token).users_info(user=user)["name"]
+            source = result["name"]
             blocks.append(
                 {
                     "block_id": result["id"],
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"\n\n_Responding to_: {question}\n\n _Source_: {source} on {last_updated}\n\n _Answer_: {answer}"
+                        "text": f"\n\n_Responding to_: {question}\n\n _Answer_: {answer}\n\n _Source_: {source} on {last_updated}"
                     }
                 }
             )
@@ -396,7 +396,8 @@ def answer_query(event, query, type=None):
             )
     
     for idx, result in enumerate(content_results):
-        if user not in content_store_user_mapping.get(source, []):
+        content_source_id = result["source_id"]
+        if user not in content_store_user_mapping.get(content_source_id, []):
             continue
         if idx != 0:
             blocks.append({"type": "divider"})
@@ -476,12 +477,14 @@ def contribute_answer_view(ack, body, client, view):
     answer = view["state"]["values"]["save_answer"]["save_answer"]["value"]
     user = body["user"]["id"]
     team = body["team"]["id"]
+    user_name = client.users_info(user=user)["user"]["name"]
     ack()
     message = {
         "team_id": team,
         "user_id": user,
         "type": "answer",
         "source_id": str(uuid.uuid4()),
+        "source_name": user_name,
         "source_last_updated": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "text": question,
         "answer": answer
@@ -725,7 +728,7 @@ def help_command(ack, respond, command, client):
                 }
             }
         ]
-        result_blocks = answer_query(event, command_text)
+        result_blocks = answer_query(event, command_text, type="command_search")
         blocks.extend(result_blocks)
         blocks.extend([
             {

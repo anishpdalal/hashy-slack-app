@@ -42,7 +42,7 @@ def _search_slack(team, embedding):
             results.append({
                 "id": match["id"],
                 "name": metadata["source_name"],
-                "url": metadata["url"],
+                "url": metadata.get("url"),
                 "text": metadata["text"],
                 "last_updated": metadata["last_updated"].strftime("%m/%d/%Y"),
                 "semantic_score": match["score"],
@@ -61,7 +61,7 @@ def _convert_date_to_str(d):
 
 def _search_documents(team, embedding, text_type="content"):
     filter = {
-        "team": {"$eq": team},
+        "team_id": {"$eq": team},
         "text_type": {"$eq": text_type},
         "$and": [
             {"source_type": {"$ne": "slack_message"}},
@@ -115,7 +115,7 @@ def handler(event, context):
     logger.info(body)
     results = {
         "statusCode": 200,
-        "body": None,
+        "body": {},
         "headers": {
             "Access-Control-Allow-Origin": "*",
             "Content-Type": "application/json"
@@ -126,7 +126,7 @@ def handler(event, context):
     elif path == "/search":
         team = body["team"]
         query = body["query"]
-        search_type = body["search_type"]
+        search_type = body.get("search_type")
         results_body = {
             "query": query,
             "modified_query": None,
@@ -148,10 +148,10 @@ def handler(event, context):
             query = response["choices"][0]["text"].strip()
             results_body["modified_query"] = query
         query_embedding = search_model.encode([query])
-        results["slack_messages_results"] = _search_slack(team, query_embedding)
-        results["content_results"] = _search_documents(team, query_embedding, text_type="content")
-        results["title_results"] = _search_documents(team, query_embedding, text_type="title")
-        if results["content_results"]:
-            results["summarized_result"] = _get_summary(results["content_results"][0]["text"], query)
-    
+        results["body"]["slack_messages_results"] = _search_slack(team, query_embedding)
+        results["body"]["content_results"] = _search_documents(team, query_embedding, text_type="content")
+        results["body"]["title_results"] = _search_documents(team, query_embedding, text_type="title")
+        if results["body"]["content_results"]:
+            results["body"]["summarized_result"] = _get_summary(results["body"]["content_results"][0]["text"], query)
+        results["body"] = json.dumps(results["body"])
     return results

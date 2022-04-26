@@ -1,4 +1,5 @@
 import datetime
+from importlib.metadata import metadata
 import itertools
 import json
 import logging
@@ -82,21 +83,19 @@ def handler(event, context):
             crud.update_content_store(source_id, content)
         content_store_db = crud.get_content_store(source_id)
         if content_store_type == "answer":
-            upsert_data_generator = map(lambda i: (
-                source_id,
-                embeddings,
-                {
-                    "text": content_store["text"],
-                    "team_id": team_id,
-                    "text_type": "content",
-                    "last_updated": content_store["last_updated"],
-                    "source_type": content_store_type,
-                    "source_id": user_id,
-                    "is_boosted": content_store_db.is_boosted,
-                    "answer": content_store["answer"]
+            metadata = {
+                "text": content_store["text"],
+                "team_id": team_id,
+                "text_type": "content",
+                "last_updated": content_store["source_last_updated"],
+                "source_type": content_store_type,
+                "source_name": content_store["source_name"],
+                "source_id": user_id,
+                "is_boosted": content_store_db.is_boosted,
+                "answer": content_store["answer"]
 
-                }), range(len(data))
-            )
+            }
+            index.upsert(vectors=[(source_id, embeddings, metadata)])
         else:
             upsert_data_generator = map(lambda i: (
                 data[i]["id"],
@@ -115,30 +114,30 @@ def handler(event, context):
 
                 }), range(len(data))
             )
-        if content_store_type == "slack_channel":
-            for d in data:
-                slack_message_id = d["id"]
-                slack_message_user = d["user_id"]
-                slack_message_last_updated = pytz.utc.localize(datetime.datetime.strptime(
-                    d["last_updated"],
-                    "%Y-%m-%dT%H:%M:%S.%fZ"
-                ))
-                if not crud.get_content_store(source_id):
-                    content = {
-                        "team_id": team_id,
-                        "type": "slack_message",
-                        "source_id": slack_message_id,
-                        "user_ids": [slack_message_user] if slack_message_user else None,
-                        "source_last_updated": slack_message_last_updated,
-                        "num_vectors": 1
-                    }
-                    crud.create_content_store(content)
-        for ids_vectors_chunk in chunks(upsert_data_generator, batch_size=100):
-            index.upsert(vectors=ids_vectors_chunk)
-        if num_vectors > len(data):
-            delete_data_generator = map(lambda i: data[i]["id"], range(len(data), num_vectors))
-            for ids_chunk in chunks(delete_data_generator, batch_size=100):
-                index.delete(ids=list(ids_chunk))
+            if content_store_type == "slack_channel":
+                for d in data:
+                    slack_message_id = d["id"]
+                    slack_message_user = d["user_id"]
+                    slack_message_last_updated = pytz.utc.localize(datetime.datetime.strptime(
+                        d["last_updated"],
+                        "%Y-%m-%dT%H:%M:%S.%fZ"
+                    ))
+                    if not crud.get_content_store(source_id):
+                        content = {
+                            "team_id": team_id,
+                            "type": "slack_message",
+                            "source_id": slack_message_id,
+                            "user_ids": [slack_message_user] if slack_message_user else None,
+                            "source_last_updated": slack_message_last_updated,
+                            "num_vectors": 1
+                        }
+                        crud.create_content_store(content)
+            for ids_vectors_chunk in chunks(upsert_data_generator, batch_size=100):
+                index.upsert(vectors=ids_vectors_chunk)
+            if (content_store_type != "answer" and content_store_type != "slack_channel") and num_vectors > len(data):
+                delete_data_generator = map(lambda i: data[i]["id"], range(len(data), num_vectors))
+                for ids_chunk in chunks(delete_data_generator, batch_size=100):
+                    index.delete(ids=list(ids_chunk))
         
 
     crud.dispose_engine()
