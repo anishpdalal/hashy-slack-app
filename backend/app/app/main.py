@@ -67,6 +67,14 @@ def handle_message_deleted(event, say):
     pass
 
 
+@app.event("member_joined_channel")
+def handle_member_join(client, event, say):
+    user_id = event["user"]
+    team_id = event["team"]
+    channel_id = event["channel"]
+    
+
+
 @app.event({"type": "message", "subtype": "file_share"})
 def handle_message_file_share(logger, event, say):
     for file in event["files"]:
