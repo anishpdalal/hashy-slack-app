@@ -4,6 +4,7 @@ import itertools
 import json
 import logging
 import os
+import re
 import uuid
 
 import boto3
@@ -72,7 +73,35 @@ def handle_member_join(client, event, say):
     user_id = event["user"]
     team_id = event["team"]
     channel_id = event["channel"]
-    
+    bot = installation_store.find_bot(
+        enterprise_id=None,
+        team_id=team_id,
+    )
+    bot_user_id = bot.bot_user_id
+    channel_content_store = crud.get_content_store(channel_id)
+    if bot_user_id == user_id and not channel_content_store:
+        domain = client.team_info()["team"]["domain"]
+        channel_name = client.conversations_info(channel=channel_id)["channel"]["name"]
+        latest_conversation = client.conversations_history(channel=channel_id, limit=1)
+        if "messages" in latest_conversation and len(latest_conversation["messages"]) == 1:
+            source_last_updated = latest_conversation["messages"][0]["ts"]
+            source_last_updated = datetime.datetime.fromtimestamp(float(source_last_updated)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        else:
+            source_last_updated = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        integration = crud.get_user_integration(team_id, None, "slack")
+        message = {
+            "integration_id": integration.id,
+            "team_id": team_id,
+            "user_id": None,
+            "url": f"https://{domain}.slack.com/archives/{channel_id}",
+            "type": "slack_channel",
+            "name": channel_name,
+            "source_id": channel_id,
+            "source_last_updated": source_last_updated,
+            "initial_index": True
+        }
+        queue.send_message(MessageBody=json.dumps(message))
+
 
 
 @app.event({"type": "message", "subtype": "file_share"})
@@ -110,16 +139,18 @@ def handle_message_channel(event, say, client):
         team = event.get("team")
         user = event.get("user")
         query = event.get("text")
-        if query and "?" in query and user and team:
+        cleaned_query = re.sub(r'http\S+', '', query) if query else None
+        if query and "?" in cleaned_query and user and team:
             response = requests.post(
                 f"{os.environ['API_URL']}/search",
                 data=json.dumps(
                     {
+                        "query_id": str(uuid.uuid4()),
                         "team": team,
                         "query": query,
                         "user": user,
                         "count": 10,
-                        "type": "channel"
+                        "search_type": "channel"
                     }
                 )
             ).json()
@@ -127,16 +158,33 @@ def handle_message_channel(event, say, client):
             slack_scores = [res["semantic_score"] for res in response.get("slack_messages_results", [])]
             max_slack_score = max(slack_scores) if len(slack_scores) else 0
             if max_slack_score >= 0.50:
+                blocks = []
                 top_slack_result = response["slack_messages_results"][0]
-                channel_link = f"<{top_slack_result['url']}|{top_slack_result['name']}>"
-                blocks = [
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"Found a related slack message in {channel_link}."
+                if top_slack_result["source_type"] == "slack_message":
+                    channel_link = f"<{top_slack_result['url']}|{top_slack_result['name']}>"
+                    blocks.append(
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"Found a related slack message in {channel_link}."
+                            }
                         }
-                    },
+                    )
+                else:
+                    source_name = top_slack_result["name"]
+                    question = top_slack_result["text"]
+                    answer = top_slack_result["answer"]
+                    blocks.append(
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"Found a related answer from {source_name} \n\n_Answer_: {answer}\n\n_Topic_: {question}"
+                            }
+                        }
+                    )
+                blocks.append(
                     {
                         "type": "actions",
                         "elements": [
@@ -152,7 +200,7 @@ def handle_message_channel(event, say, client):
                             }
 			            ]
 		            }
-                ]
+                )
                 client.chat_postMessage(channel=channel, thread_ts=ts, blocks=blocks)
 
 
@@ -281,6 +329,7 @@ def answer_query(event, query, type=None):
         f"{os.environ['API_URL']}/search",
         data=json.dumps(
             {
+                "query_id": str(uuid.uuid4()),
                 "team": team,
                 "query": query,
                 "user": user,

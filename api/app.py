@@ -127,18 +127,13 @@ def handler(event, context):
         team = body["team"]
         query = body["query"]
         search_type = body.get("search_type")
-        results_body = {
-            "query": query,
-            "modified_query": None,
-            "summarized_result": None,
-            "slack_messages_results": [],
-            "content_results": [],
-            "title_results": []
-        }
+        results["body"]["query"] = query
+        results["body"]["modified_query"] = None
+        results["body"]["query_id"] = body.get("query_id")
         if search_type == "auto_reply" or search_type == "channel":
             response = openai.Completion.create(
                 engine="text-davinci-002",
-                prompt=f"Summarize the following question\n\n{query}",
+                prompt=f"Condense the following question\n\nQuestion: {query}\nCondensed Question:",
                 temperature=0,
                 max_tokens=64,
                 top_p=1,
@@ -146,7 +141,7 @@ def handler(event, context):
                 presence_penalty=0
             )
             query = response["choices"][0]["text"].strip()
-            results_body["modified_query"] = query
+            results["body"]["modified_query"] = query
         query_embedding = search_model.encode([query])
         results["body"]["slack_messages_results"] = _search_slack(team, query_embedding)
         results["body"]["content_results"] = _search_documents(team, query_embedding, text_type="content")
@@ -154,4 +149,5 @@ def handler(event, context):
         if results["body"]["content_results"]:
             results["body"]["summarized_result"] = _get_summary(results["body"]["content_results"][0]["text"], query)
         results["body"] = json.dumps(results["body"])
+        logger.info(results["body"])
     return results

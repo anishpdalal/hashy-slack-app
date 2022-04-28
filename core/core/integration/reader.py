@@ -353,11 +353,9 @@ def _should_index_slack_message(message):
     type = message.get("type")
     if not text or not user or type != "message":
         return False
-    elif "?" in text:
+    elif "?" in text and len(text.split()) >= 15:
         return True
     elif "https://" in text:
-        return True
-    elif len(text.split()) >= 15:
         return True
     else:
         return False
@@ -368,14 +366,8 @@ def _get_slack_channel_messages(integration, content_store):
     client = WebClient(token=integration.token)
     channel_id = content_store["source_id"]
     last_updated = content_store["source_last_updated"]
-    if last_updated:
-        oldest = datetime.datetime.strptime(last_updated, "%Y-%m-%dT%H:%M:%S.%fZ").timestamp()
-        messages = client.conversations_history(
-            channel=channel_id,
-            oldest=str(oldest),
-            inclusive=False
-        )["messages"]
-    else:
+    initial_index = content_store.get("initial_index")
+    if initial_index:
         messages = []
         conversations = client.conversations_history(channel=channel_id, limit=1000)
         messages.extend(conversations.get("messages", []))
@@ -384,6 +376,13 @@ def _get_slack_channel_messages(integration, content_store):
             conversations = client.conversations_history(channel=channel_id, limit=1000, cursor=next_cursor)
             messages.extend(conversations.get("messages", []))
             next_cursor = conversations.get("response_metadata", {}).get("next_cursor")
+    elif last_updated:
+        oldest = datetime.datetime.strptime(last_updated, "%Y-%m-%dT%H:%M:%S.%fZ").timestamp()
+        messages = client.conversations_history(
+            channel=channel_id,
+            oldest=str(oldest),
+            inclusive=False
+        )["messages"]
     filter_messages = []
     for message in messages:
         if not _should_index_slack_message(message):

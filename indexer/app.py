@@ -122,7 +122,7 @@ def handler(event, context):
                         d["last_updated"],
                         "%Y-%m-%dT%H:%M:%S.%fZ"
                     ))
-                    if not crud.get_content_store(source_id):
+                    if not crud.get_content_store(slack_message_id):
                         content = {
                             "team_id": team_id,
                             "type": "slack_message",
