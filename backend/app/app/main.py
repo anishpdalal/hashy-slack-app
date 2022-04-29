@@ -1,13 +1,18 @@
 import base64
+import datetime
 import itertools
 import json
 import logging
 import os
+import re
+from typing import Any, List
+import uuid
 
 import boto3
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from google_auth_oauthlib.flow import Flow
+from pydantic import BaseModel
 import requests
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
@@ -16,7 +21,7 @@ from slack_sdk.oauth.installation_store.sqlalchemy import SQLAlchemyInstallation
 from slack_sdk.web import WebClient
 from slack_sdk.errors import SlackApiError
 
-from app.db import crud, database, schemas
+from core.db import crud
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 installation_store = SQLAlchemyInstallationStore(
     client_id=os.environ["SLACK_CLIENT_ID"],
-    engine=database.engine
+    engine=crud.engine
 )
 
 installation_store.create_tables()
@@ -60,17 +65,75 @@ def handle_file_created_events(client, event, say):
     pass
 
 
-@app.event({
-    "type": "message",
-    "subtype": "message_deleted"
-})
+@app.event({"type": "message", "subtype": "message_deleted"})
 def handle_message_deleted(event, say):
     pass
 
 
-@app.event({
-    "type": "message",
-})
+@app.event("member_joined_channel")
+def handle_member_join(client, event, say):
+    user_id = event["user"]
+    team_id = event["team"]
+    channel_id = event["channel"]
+    bot = installation_store.find_bot(
+        enterprise_id=None,
+        team_id=team_id,
+    )
+    bot_user_id = bot.bot_user_id
+    channel_content_store = crud.get_content_store(channel_id)
+    if bot_user_id == user_id and not channel_content_store:
+        domain = client.team_info()["team"]["domain"]
+        channel_name = client.conversations_info(channel=channel_id)["channel"]["name"]
+        latest_conversation = client.conversations_history(channel=channel_id, limit=1)
+        if "messages" in latest_conversation and len(latest_conversation["messages"]) == 1:
+            source_last_updated = latest_conversation["messages"][0]["ts"]
+            source_last_updated = datetime.datetime.fromtimestamp(float(source_last_updated)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        else:
+            source_last_updated = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        integration = crud.get_user_integration(team_id, None, "slack")
+        message = {
+            "integration_id": integration.id,
+            "team_id": team_id,
+            "user_id": None,
+            "url": f"https://{domain}.slack.com/archives/{channel_id}",
+            "type": "slack_channel",
+            "name": channel_name,
+            "source_id": channel_id,
+            "source_last_updated": source_last_updated,
+            "initial_index": True
+        }
+        queue.send_message(MessageBody=json.dumps(message))
+
+
+
+@app.event({"type": "message", "subtype": "file_share"})
+def handle_message_file_share(logger, event, say):
+    for file in event["files"]:
+        mimetype = file["mimetype"]
+        file_id = file["id"]
+        user_id = file["user"]
+        converted_pdf = file.get("converted_pdf")
+        url = file["url_private"] if converted_pdf is None else converted_pdf
+        file_name = file["name"]
+        team_id = url.split("/")[4].split("-")[0]
+        timestamp = file["timestamp"]
+        message = {
+            "team_id": team_id,
+            "user_id": user_id,
+            "url": url,
+            "type": f"slack|{mimetype}",
+            "name": file_name,
+            "source_id": file_id,
+            "source_last_updated": datetime.datetime.fromtimestamp(timestamp).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            )
+        }
+        logger.info(message)
+        say(f"Processing File {file_name}")
+        queue.send_message(MessageBody=json.dumps(message))
+
+
+@app.event({"type": "message"})
 def handle_message_channel(event, say, client):
     if event.get("channel_type") == "channel" and not event.get("parent_user_id"):
         channel = event["channel"]
@@ -78,24 +141,52 @@ def handle_message_channel(event, say, client):
         team = event.get("team")
         user = event.get("user")
         query = event.get("text")
-        if query and "?" in query and user and team:
+        cleaned_query = re.sub(r'http\S+', '', query) if query else None
+        if query and "?" in cleaned_query and user and team:
             response = requests.post(
                 f"{os.environ['API_URL']}/search",
-                data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": "channel"})
-            ).json()
-            modified_query = response["query"]
-            answer_scores = [res["score"] for res in response.get("answers", [])]
-            max_answer_score = max(answer_scores) if len(answer_scores) else 0
-            if max_answer_score >= 0.60:
-                name = response["answers"][0]["name"]
-                blocks = [
+                data=json.dumps(
                     {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"Found a related slack message in {name}."
+                        "query_id": str(uuid.uuid4()),
+                        "team": team,
+                        "query": query,
+                        "user": user,
+                        "count": 10,
+                        "search_type": "channel"
+                    }
+                )
+            ).json()
+            modified_query = response["modified_query"]
+            slack_scores = [res["semantic_score"] for res in response.get("slack_messages_results", [])]
+            max_slack_score = max(slack_scores) if len(slack_scores) else 0
+            if max_slack_score >= 0.60:
+                blocks = []
+                top_slack_result = response["slack_messages_results"][0]
+                if top_slack_result["source_type"] == "slack_message":
+                    channel_link = f"<{top_slack_result['url']}|{top_slack_result['name']}>"
+                    blocks.append(
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"Found a related slack message in {channel_link}."
+                            }
                         }
-                    },
+                    )
+                else:
+                    source_name = top_slack_result["name"]
+                    question = top_slack_result["text"]
+                    answer = top_slack_result["answer"]
+                    blocks.append(
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"Found a related answer from {source_name} \n\n_Answer_: {answer}\n\n_Topic_: {question}"
+                            }
+                        }
+                    )
+                blocks.append(
                     {
                         "type": "actions",
                         "elements": [
@@ -111,38 +202,8 @@ def handle_message_channel(event, say, client):
                             }
 			            ]
 		            }
-                ]
+                )
                 client.chat_postMessage(channel=channel, thread_ts=ts, blocks=blocks)
-
-
-
-@app.event({
-    "type": "message",
-    "subtype": "file_share"
-})
-def handle_message_file_share(event, say):
-    for file in event["files"]:
-        mimetype = file["mimetype"]
-        filetype = file["filetype"]
-        file_id = file["id"]
-        user = file["user"]
-        converted_pdf = file.get("converted_pdf")
-        url = file["url_private"] if converted_pdf is None else converted_pdf
-        file_name = file["name"]
-        team = url.split("/")[4].split("-")[0]
-        message = {
-            "mimetype": mimetype,
-            "filetype": filetype,
-            "file_id": file_id,
-            "user": user,
-            "converted_pdf": converted_pdf,
-            "url": url,
-            "file_name": file_name,
-            "team": team
-        }
-        logger.info(message)
-        say(f"Processing File {file_name}")
-        queue.send_message(MessageBody=json.dumps(message))
 
 
 @app.action("view_more_button")
@@ -227,24 +288,24 @@ def handle_submit_answer_view(ack, body, client, view):
     answer = view["state"]["values"]["save_answer"]["save_answer"]["value"]
     selected_conversations = view["state"]["values"]["ask_teammate"]["ask_teammate"]["selected_conversations"]
     if answer:
-        query = {
-            "team": team,
-            "user": user,
+        message = {
+            "team_id": team,
+            "user_id": user,
+            "type": "answer",
+            "source_id": str(uuid.uuid4()),
+            "source_name": user_name,
+            "source_last_updated": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "text": text,
-            "result": answer
+            "answer": answer
         }
-        requests.post(
-            f"{os.environ['API_URL']}/create-answer",
-            data=json.dumps(query)
-        )
+        queue.send_message(MessageBody=json.dumps(message))
         client.chat_postMessage(
             channel=user,
-            text="Successfully contributed an answer!"
+            text=f"Successfully saved answer to {text}"
         )
-    db = database.SessionLocal()
     for id in selected_conversations:
-        logged_user = crud.get_logged_user(db, id)
-        if logged_user:
+        slack_user = crud.get_slack_user(team, user)
+        if slack_user:
             msg = f"{user_name} has requested your help. Please enter `/hashy {text}` and provide an answer to the question. Thanks!"
         else:
             msg = f"{user_name} has requested your help. Please install the Hashy Slack app and enter `/hashy {text}` to provide an answer to the question. Thanks!"
@@ -255,124 +316,7 @@ def handle_submit_answer_view(ack, body, client, view):
                 channel_name = client.conversations_info(channel=id)["channel"]["name"]
                 msg = f"The channel {channel_name} couldn't receive your question. Invite Hashy to the channel and ask again!"
                 client.chat_postMessage(channel=user, text=msg)
-    db.close()
 
-
-@app.view("delete_answer_view")
-def handle_delete_answer_view(ack, body, client, view):
-    ack()
-    query_ids = [opt["value"] for opt in view["state"]["values"]["delete_answers"]["delete_answers"]["selected_options"]]
-    team = body["team"]["id"]
-    user = body["user"]["id"]
-    requests.post(
-        f"{os.environ['API_URL']}/delete-answers",
-        data=json.dumps({"team": team, "user": user, "query_ids": query_ids})
-    )
-    msg = "answers" if len(query_ids) > 1 else "answer"
-    client.chat_postMessage(
-        channel=user,
-        text=f"Successfully deleted {len(query_ids)} {msg}!"
-    )
-
-
-def parse_summary(summary):
-    if type(summary) == list:
-        results = []
-        results.append(" | ".join(list(summary[0].keys())))
-        values = [" | ".join([str(val) for val in res.values()]) for res in summary]
-        results.extend(values)
-        return "\n".join(results)[0:3000]
-    else:
-        return summary
-
-
-@app.action("increment_count")
-def handle_some_action(ack, body, logger, client):
-    ack()
-    query_id = body["actions"][0]["value"]
-    db = database.SessionLocal()
-    query = crud.get_query(db, query_id)
-    if query:
-        upvotes = query.upvotes or 0
-        voters = query.voters or []
-        if body["user"]["id"] not in voters:
-            voters.append(body["user"]["id"])
-            voters = list(set(voters))
-            crud.update_query(db, query_id, {"upvotes": upvotes + 1, "voters": voters})
-            db.commit()
-            for block in body["view"]["blocks"]:
-                if block["block_id"] == query_id:
-                    block["accessory"]["text"]["text"] = f":arrow_up: ({upvotes + 1})"
-            client.views_update(
-                hash=body["view"]["hash"],
-                view_id=body["view"]["id"],
-                view={
-                    "callback_id": body["view"]["callback_id"],
-                    "type": body["view"]["type"],
-                    "title": body["view"]["title"],
-                    "blocks": body["view"]["blocks"],
-                    "private_metadata": body["view"]["private_metadata"],
-                    "submit": body["view"]["submit"],
-                    "close": body["view"]["close"],
-                    "clear_on_close": body["view"]["clear_on_close"]
-                }
-            )
-    db.close()
-
-
-
-@app.action("report_click")
-def handle_report_click(ack, body, client):
-    ack()
-    trigger_id = body["trigger_id"]
-    user = body["user"]["id"]
-    team = body["team"]["id"]
-    ts = body["message"]["ts"]
-    block_id = body["actions"][0]["block_id"]
-    block_messages = body["message"]["blocks"]
-    idx = block_messages.index(next(filter(lambda n: n.get("block_id") == block_id, block_messages)))
-    question_block = block_messages[idx - 3]
-    question = question_block["text"]["text"].split("Question/Topic: ")[1]
-    value = block_messages[idx]["elements"][0]["value"]
-    blocks = [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"Query: {question}"
-            }
-	    },
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": value
-            }
-	    }
-    ]
-    client.views_open(
-        trigger_id=trigger_id,
-        view={
-            "type": "modal",
-            "title": {
-                "type": "plain_text",
-                "text": f"Takeaways",
-                "emoji": True
-            },
-            "blocks": blocks,
-            "close": {
-                "type": "plain_text",
-                "text": "Close",
-                "emoji": True
-            },
-            "clear_on_close": True
-        },
-    )
-    requests.post(
-        f"{os.environ['API_URL']}/log-event",
-        data=json.dumps({"team": team, "query": question, "user": user, "type": "REPORT_CLICK", "ts": ts})
-    )
-        
 
 def answer_query(event, query, type=None):
     team = event["team"]
@@ -383,71 +327,68 @@ def answer_query(event, query, type=None):
         "query": query
     }))
     
-    if "|" in query:
-        response = requests.post(
-            f"{os.environ['API_URL']}/tabular-search",
-            data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": type})
-        ).json()
+    response = requests.post(
+        f"{os.environ['API_URL']}/search",
+        data=json.dumps(
+            {
+                "query_id": str(uuid.uuid4()),
+                "team": team,
+                "query": query,
+                "user": user,
+                "count": 10,
+                "search_type": type
+            }
+        )
+    ).json()
+    slack_messages_results = response.get("slack_messages_results", [])
+    content_results = response.get("content_results", [])
+    title_results = response.get("title_results", [])
+    summarized_result = response.get("summarized_result")
+    all_results = slack_messages_results + content_results
+    source_ids = [result["source_id"] for result in content_results + title_results]
+    content_stores = crud.get_content_stores(source_ids) or []
+    content_store_user_mapping = {content_store.source_id: content_store.user_ids for content_store in content_stores}
+    if all_results:
+        top_result = max(slack_messages_results + content_results, key=lambda x: x["semantic_score"])
+        top_score = int(top_result["semantic_score"] * 100)  
+        days_old = (datetime.datetime.now() - datetime.datetime.strptime(top_result["last_updated"], "%m/%d/%Y")).days
+        freshness_score = top_score + 10 if days_old <= 100 else top_score
+        freshness_score = min(freshness_score, 95)
     else:
-        response = requests.post(
-            f"{os.environ['API_URL']}/search",
-            data=json.dumps({"team": team, "query": query, "user": user, "count": 10, "type": type})
-        ).json()
-
+        freshness_score = 0
+    gdrive_integration = crud.get_user_integration(team, user, "gdrive")
+    notion_integration = crud.get_user_integration(team, user, "notion")
     blocks = []
-    sources = list(set([res.get("source") for res in response.get("search_results", [])]))
-    query_ids = list(set([res["id"] for res in response.get("answers", [])]))
-    db = database.SessionLocal()
-    doc_user_mapping = crud.get_documents(db, sources)
-    query_upvote_mapping = crud.get_queries(db, query_ids)
-    db.close()
-    max_search_result_score = max([res.get("score", 0) for res in response["search_results"]]) if response.get("search_results", []) else 0
-    max_answer_score = max([res.get("score", 0) for res in response["answers"]]) if response.get("answers", []) else 0
-    score = int(max(max_search_result_score, max_answer_score) * 100)
-    score += min(2, sum([val or 0 for val in query_upvote_mapping.values()])) * 5
-    score = min(100, score) if score > 100 else score
     blocks.append({
         "type": "header",
         "text": {
             "type": "plain_text",
-            "text": f"Knowledge Freshness Score: {score}",
+            "text": f"Knowledge Freshness Score: {freshness_score}",
             "emoji": True
         }
     })
-    if len(query_ids) < 2:
+    if summarized_result and "I don't know" not in summarized_result:
+        blocks.append({
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"Summarized Answer",
+                "emoji": True
+            }
+        })
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "plain_text",
-                    "text": "Increase the score for this topic by contributing a team answer",
+                    "text": summarized_result,
                     "emoji": True
                 }
             }
         )
-    if response.get("summary") and user in doc_user_mapping.get(response["search_results"][0].get("source"), []):
-        if response["summary"] != "Unknown":
-            blocks.append({
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": f"Summarized Answer",
-                    "emoji": True
-                }
-            })
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "plain_text",
-                        "text": parse_summary(response["summary"]),
-                        "emoji": True
-                    }
-                }
-            )
-            blocks.append({"type": "divider"})
+        blocks.append({"type": "divider"})
 
-    if len(response.get("answers", [])) > 0:
+    if slack_messages_results:
         blocks.append({
 			"type": "header",
 			"text": {
@@ -456,54 +397,44 @@ def answer_query(event, query, type=None):
 				"emoji": True
 			}
 		})
-        response["answers"].sort(key=lambda x: query_upvote_mapping.get(x["id"], 0) or 0, reverse=True)
     
-    for idx, result in enumerate(response.get("answers", [])):
+    for idx, result in enumerate(slack_messages_results):
         if idx != 0:
             blocks.append({"type": "divider"})
-        source = result.get("source","")
-        name = result.get("name")
-        result_text = "\n".join(result["result"].split("\n")[0:1])
-        question = result.get("text", "")
-        last_modified = result.get("last_modified", "")
-        source_text = f"<{source}|{name}>" if source else f"{name} on {last_modified}"
-        upvotes = query_upvote_mapping.get(result['id']) or 0
-        blocks.append(
-            {
-                "block_id": result["id"],
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"\n\n_Responding to_: {question}\n\n _Source_: {source_text}\n\n"
-                },
-                "accessory": {
-                    "type": "button",
-                    "text": {
-                        "type": "plain_text",
-                        "text": f":arrow_up: ({upvotes})"
-                    },
-                    "value": result["id"],
-                    "action_id": "increment_count"
-                }
-            }
-        )
-        if result_text:
+        if result["source_type"] == "slack_message":
+            question = result["text"]
+            source = f"<{result['url']}|{result['name']}>"
+            last_updated = result["last_updated"]
             blocks.append(
                 {
+                    "block_id": result["id"],
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": result_text
+                        "text": f"\n\n_Responding to_: {question}\n\n _Source_: {source} on {last_updated}\n\n"
                     }
                 }
             )
-    
-    db = database.SessionLocal()
-    google_token = crud.get_google_token(db, user)
-    notion_token = crud.get_notion_token(db, user)
-    db.close()
-    
-    if len(response["search_results"]) > 0:
+        elif result["source_type"] == "answer":
+            question = result["text"]
+            answer = result["answer"]
+            last_updated = result["last_updated"]
+            source = result["name"]
+            blocks.append(
+                {
+                    "block_id": result["id"],
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"\n\n_Responding to_: {question}\n\n _Answer_: {answer}\n\n _Source_: {source} on {last_updated}"
+                    }
+                }
+            )
+        else:
+            pass
+
+
+    if content_results:
         blocks.append({
 			"type": "header",
 			"text": {
@@ -512,7 +443,7 @@ def answer_query(event, query, type=None):
 				"emoji": True
 			}
 		})
-        if not google_token and not notion_token:
+        if not gdrive_integration and not notion_integration:
             blocks.append(
                 {
                     "type": "section",
@@ -523,22 +454,31 @@ def answer_query(event, query, type=None):
                 }
             )
     
-    for idx, result in enumerate(response["search_results"]):
-        source = result.get("source","")
-        if user not in doc_user_mapping.get(source, []):
+    for idx, result in enumerate(content_results):
+        content_source_id = result["source_id"]
+        if user not in content_store_user_mapping.get(content_source_id, []):
             continue
         if idx != 0:
             blocks.append({"type": "divider"})
-        name = result.get("name")
-        result_text = result["result"]
-        last_modified = result.get("last_modified", "")
-        source_text = f"<{source}|{name}>" if source else f"{name} on {last_modified}"
+        name = result["name"]
+        url = result["url"]
+        text = result["text"]
+        last_updated = result["last_updated"]
+        source_type = result["source_type"]
+        if source_type.startswith("notion"):
+            source_type = "(Notion)"
+        elif source_type.startswith("drive"):
+            source_type = "(Google Drive)"
+        else:
+            source_type = ""
+        source = "Notion" if source_type.startswith("notion") else "Google Drive"
+        source_text = f"<{url}|{name}> {source_type} on {last_updated}"
         blocks.append(
             {
                 "type": "section",
                 "text": {
                     "type": "plain_text",
-                    "text": f"{result_text}",
+                    "text": text,
                     "emoji": True
                 }
             }
@@ -548,7 +488,7 @@ def answer_query(event, query, type=None):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"\n\n Source: {source_text}"
+                    "text": f"Source: {source_text}"
                 }
             }
         )
@@ -574,7 +514,6 @@ def handle_view_events(ack, body, client, view):
     integration, channel = integration.split("-")
     user = body["user"]["id"]
     team = body["team"]["id"]
-    db = database.SessionLocal()
     if integration.startswith("notion"):
         notion_id = os.environ["NOTION_CLIENT_ID"]
         redirect_uri = os.environ["NOTION_REDIRECT_URI"]
@@ -582,12 +521,11 @@ def handle_view_events(ack, body, client, view):
     else:
         google_redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
         google_client_id = os.environ["GOOGLE_CLIENT_ID"]
-        token = crud.get_google_token(db, user)
-        if not token or not token.encrypted_token:
+        gdrive_integration = crud.get_user_integration(team, user, "gdrive")
+        if not gdrive_integration or not gdrive_integration.token:
             msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&prompt=consent&include_granted_scopes=true&response_type=code&state={user}-{team}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
         else:
             msg = f"<https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}&redirect_uri={google_redirect_uri}&client_id={google_client_id}|Click Here to integrate with Google Drive>"
-    db.close()
     ack()
     client.chat_postMessage(channel=channel, text=msg)
 
@@ -598,17 +536,19 @@ def contribute_answer_view(ack, body, client, view):
     answer = view["state"]["values"]["save_answer"]["save_answer"]["value"]
     user = body["user"]["id"]
     team = body["team"]["id"]
+    user_name = client.users_info(user=user)["user"]["name"]
     ack()
-    query = {
-        "team": team,
-        "user": user,
+    message = {
+        "team_id": team,
+        "user_id": user,
+        "type": "answer",
+        "source_id": str(uuid.uuid4()),
+        "source_name": user_name,
+        "source_last_updated": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "text": question,
-        "result": answer
+        "answer": answer
     }
-    requests.post(
-        f"{os.environ['API_URL']}/create-answer",
-        data=json.dumps(query)
-    )
+    queue.send_message(MessageBody=json.dumps(message))
     client.chat_postMessage(channel=user, text=f"Successfully saved answer to {question}")
 
 
@@ -697,13 +637,6 @@ def help_command(ack, respond, command, client):
                     "text": {
                         "type": "mrkdwn",
                         "text": f"To search or contribute answer to query, enter `/hashy <your query here>`"
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"To delete an answer, enter `/hashy delete`"
                     }
                 },
                 {
@@ -810,86 +743,6 @@ def help_command(ack, respond, command, client):
                 }
             }
         )
-    elif command_text == "delete":
-        response = requests.post(
-            f"{os.environ['API_URL']}/list-answers",
-            data=json.dumps({"team": team, "user": user})
-        ).json()
-        options = [
-            {
-                "text": {
-                    "type": "plain_text",
-                    "text": res["answer"][0:70],
-                    "emoji": True
-                },
-                "value": res["query_id"]
-            } for res in response
-        ]
-        if len(options) > 0:
-            client.views_open(
-                trigger_id=command["trigger_id"],
-                view={
-                    "callback_id": "delete_answer_view",
-                    "type": "modal",
-                    "blocks": [{
-                        "block_id": "delete_answers",
-                        "type": "input",
-                        "element": {
-                            "type": "multi_static_select",
-                            "placeholder": {
-                                "type": "plain_text",
-                                "text": "Select answers",
-                                "emoji": True
-                            },
-                            "options": options,
-                            "action_id": "delete_answers",
-                        },
-                        "label": {
-                            "type": "plain_text",
-                            "text": "Select answers to delete",
-                            "emoji": True
-                        }
-                    }],
-                    "title": {
-                        "type": "plain_text",
-                        "text": "Delete Answers",
-                        "emoji": True
-                    },
-                    "submit": {
-                        "type": "plain_text",
-                        "text": "Submit",
-                        "emoji": True
-                    },
-                    "close": {
-                        "type": "plain_text",
-                        "text": "Cancel",
-                        "emoji": True
-                    }
-                }
-            )
-        else:
-            client.views_open(
-                trigger_id=command["trigger_id"],
-                view={
-                    "type": "modal",
-                    "blocks": [
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "plain_text",
-                                "text": "You do not have any saved answers",
-                                "emoji": True
-                            }
-		                }
-                    ],
-                    "title": {
-                        "type": "plain_text",
-                        "text": "Delete Answers",
-                        "emoji": True
-                    },
-                    "clear_on_close": True
-                }
-            )
     else:
         event = {
             "team": team,
@@ -934,7 +787,7 @@ def help_command(ack, respond, command, client):
                 }
             }
         ]
-        result_blocks = answer_query(event, command_text)
+        result_blocks = answer_query(event, command_text, type="command_search")
         blocks.extend(result_blocks)
         blocks.extend([
             {
@@ -1003,45 +856,17 @@ def help_command(ack, respond, command, client):
 @app.event("app_home_opened")
 def handle_app_home_opened(client, event, say):
     user_id = event["user"]
-    db = database.SessionLocal()
-    try:
-        logged_user = crud.get_logged_user(db, user_id)
-        if logged_user is None:
-            result = client.users_info(
-                user=user_id
-            )
-            team_id = result["user"]["team_id"]
-            team_info = client.team_info(
-                team=team_id
-            )
-            team_name = team_info["team"]["name"]
-            user = crud.create_logged_user(
-                db, schemas.LoggedUserCreate(
-                    user_id=user_id,
-                    team_id=team_id,
-                    team_name=team_name
-                )
-            )
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-            say(f":wave: Hi <@{result['user']['name']}>, Welcome to the Hashy app on Slack! Hashy lets you quickly find and share knowledge across your org.\n"
-                "Here's how to get started :point_down:\n\n"
-                f"1. Think of a question you get asked all the time. Type in `/hashy <your question here>` and enter your answer\n"
-                "Users tend to answer with written explanations or links to documents/videos/web pages.\n\n"
-                f"2. Congrats! Your team can get your answer from Hashy rather than directly asking you all the time :smile:.\n"
-                "The next time someone asks the same query, they'll see the answer you provided. Go ahead and try it out!\n\n"
-                f"3. Now think of an important question that someone else knows how to answer. Type in `/hashy <your question here>`\n"
-                "and select the coworker to ask the question to. The coworker will be prompted to enter an answer.\n"
-                "This is how Hashy seamlessly captures knowledge across teams.\n\n"
-                "4. To learn how to get the most out of Hashy, book a 15 min <https://calendly.com/taherhassonjee/hashy-onboarding|Onboarding Call> with us.\n\n"
-                "5. Enter `/hashy help` to learn how to setup integrations and also watch an overview of Hashy.\n\n"
-            )
-    except:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    result = client.users_info(user=user_id)
+    team_id = result["user"]["team_id"]
+    slack_user = crud.get_slack_user(team_id, user_id)
+    if slack_user is None:
+        team_name = result["team"]["name"]
+        crud.create_slack_user({
+            "user_id": user_id,
+            "team_name": team_name,
+            "team_id": team_id
+        })
+        say(f":wave: Hi <@{result['user']['name']}>, Welcome to the Hashy app on Slack! Hashy lets you quickly find and share knowledge across your org.\n")
 
 api = FastAPI()
 
@@ -1084,30 +909,20 @@ async def google_authorize(req: Request, state):
     auth_response = f"https://{auth_response.netloc}{auth_response.path}?{auth_response.query}"
     flow.fetch_token(authorization_response=auth_response)
     credentials = flow.credentials
-    db = database.SessionLocal()
-    try:
-        token = crud.get_google_token(db, user_id)
-        if not token:
-            fields = {
-                "user_id": user_id,
-                "team": team_id,
-                "encrypted_token": credentials.refresh_token
-            }
-            token = crud.create_google_token(fields)
-            db.add(token)
-            db.commit()
-            db.refresh(token)
-        else:
-            if credentials.refresh_token is not None:
-                fields = {}
-                fields["encrypted_token"] = credentials.refresh_token
-                crud.update_google_token(db, token.id, fields)
-                db.commit()
-    except:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    integration = crud.get_user_integration(team_id, user_id, "gdrive")
+    if not integration:
+        fields = {
+            "team_id": team_id,
+            "type": "gdrive",
+            "token": credentials.refresh_token,
+            "user_id": user_id
+        }
+        crud.create_integration(fields)
+    else:
+        if credentials.refresh_token is not None:
+            fields["token"] = credentials.refresh_token
+            crud.update_integration(integration.id, fields)
+
     app_id = os.environ["GOOGLE_APP_ID"]
     key = os.environ["GOOGLE_API_KEY"]
     response = RedirectResponse(f"/google-picker/{credentials.token}?team={team_id}&user={user_id}&id={app_id}&key={key}")
@@ -1173,7 +988,8 @@ async def google_picker(token, team, user, id, key):
                         files.push({
                             "file_id": data.docs[i].id,
                             "file_name": data.docs[i].name,
-                            "mime_type": data.docs[i].mimeType
+                            "mime_type": data.docs[i].mimeType,
+                            "source_last_updated": data.docs[i].lastEditedUtc
                         });
                     }
                     var xmlhttp = new XMLHttpRequest();
@@ -1211,21 +1027,33 @@ def chunks(iterable, batch_size=10):
         chunk = tuple(itertools.islice(it, batch_size))
 
 
+class GooglePickerUpload(BaseModel):
+    files: List[Any]
+    team: str
+    user: str
+    token: str
+
+
 @api.post("/google/process-documents")
-def process_google_documents(upload: schemas.GooglePickerUpload):
+def process_google_documents(upload: GooglePickerUpload):
     user_id = upload.user
     team_id = upload.team
+    integration = crud.get_user_integration(team_id, user_id, "gdrive")
     files_to_upload = [
         {
             "Id": file["file_id"],
             "MessageBody": json.dumps(
                 {
-                    "team": team_id,
-                    "user": user_id,
+                    "integration_id": integration.id,
+                    "team_id": team_id,
+                    "user_id": user_id,
                     "url": f"https://drive.google.com/file/d/{file['file_id']}",
-                    "filetype": f"drive#file|{file['mime_type']}",
-                    "file_name": file["file_name"],
-                    "file_id": file["file_id"]
+                    "type": f"drive#file|{file['mime_type']}",
+                    "name": file["file_name"],
+                    "source_id": file["file_id"],
+                    "source_last_updated": datetime.datetime.fromtimestamp(
+                        file["source_last_updated"] / 1000
+                    ).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                 }
             )
         } for file in upload.files
@@ -1264,43 +1092,29 @@ async def notion_oauth_redirect(code, state):
         )
     )
     token_response = token_response.json()
-    db = database.SessionLocal()
-    try:
-        user_id, team_id = state.split("-")
-        notion_user_id = token_response["owner"]["user"]["id"]
-        access_token = token_response["access_token"]
-        bot_id = token_response["bot_id"]
-        workspace_id = token_response["workspace_id"]
-        fields = {
-            "user_id": user_id,
-            "team": team_id,
-            "notion_user_id": notion_user_id,
-            "encrypted_token": access_token,
-            "bot_id": bot_id,
-            "workspace_id": workspace_id
-        }
-        token = crud.get_notion_token(db, user_id)
-        if token:
-            crud.update_notion_token(db, token.id, fields)
-            db.commit()
-        else:
-            token = crud.create_notion_token(schemas.NotionTokenCreate(**fields))
-            db.add(token)
-            db.commit()
-            db.refresh(token)
-    except:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-    
-    lambda_client = boto3.client("lambda", region_name="us-east-1")
-    payload = {"team": team_id, "user": user_id}
-    lambda_client.invoke(
-        FunctionName=os.environ["LAMBDA_FUNCTION"],
-        InvocationType="Event",
-        Payload=json.dumps(payload)
-    )
+    user_id, team_id = state.split("-")
+    notion_user_id = token_response["owner"]["user"]["id"]
+    bot_id = token_response["bot_id"]
+    workspace_id = token_response["workspace_id"]
+    access_token = token_response["access_token"]
+    extra = json.dumps({
+        "notion_user_id": notion_user_id,
+        "bot_id": bot_id,
+        "workspace_id": workspace_id
+    })
+    fields = {
+        "team_id": team_id,
+        "type": "notion",
+        "token": access_token,
+        "user_id": user_id,
+        "extra": extra
+    }
+    integration = crud.get_user_integration(team_id, user_id, "notion")
+    if integration:
+        crud.update_integration(integration.id, fields)
+    else:
+        crud.create_integration(fields)
+
     bot = installation_store.find_bot(
         enterprise_id=None,
         team_id=team_id,
@@ -1308,7 +1122,8 @@ async def notion_oauth_redirect(code, state):
     client = WebClient(token=bot.bot_token)
     client.chat_postMessage(
         channel=user_id,
-        text="Integrating notion documents. It may take up to a few hours to complete processing."
+        text="Integrating your notion documents! It may take up to a few hours to process all of them. Once "
+        "they are ready we'll send you a message to notify you."
     )
     response = RedirectResponse(f"https://app.slack.com/client/{team_id}")
     return response
