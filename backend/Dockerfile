@@ -1,5 +1,7 @@
 FROM ubuntu:latest
 
+ENV DEBIAN_FRONTEND=nonintercative
+
 RUN apt update && \
     apt install -y bash \
                    build-essential \
@@ -10,13 +12,12 @@ RUN apt update && \
                    python3-pip && \
     rm -rf /var/lib/apt/lists
 
-RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
-ENV PATH="/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
 COPY ./app/requirements.txt /app/requirements.txt
-
-RUN python3 -m pip install pip --upgrade
+COPY ./dist/core-0.1.0-py3-none-any.whl /app/core-0.1.0-py3-none-any.whl
+RUN python3 -m pip install --upgrade pip
+RUN python3 -m pip install wheel
 RUN python3 -m pip install --no-cache-dir --upgrade -r /app/requirements.txt
+RUN python3 -m pip install --no-cache-dir /app/core-0.1.0-py3-none-any.whl
 
 COPY ./app /app
 WORKDIR /app
