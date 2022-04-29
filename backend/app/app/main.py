@@ -5,12 +5,14 @@ import json
 import logging
 import os
 import re
+from typing import Any, List
 import uuid
 
 import boto3
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from google_auth_oauthlib.flow import Flow
+from pydantic import BaseModel
 import requests
 from slack_bolt import App
 from slack_bolt.adapter.fastapi import SlackRequestHandler
@@ -987,7 +989,7 @@ async def google_picker(token, team, user, id, key):
                             "file_id": data.docs[i].id,
                             "file_name": data.docs[i].name,
                             "mime_type": data.docs[i].mimeType,
-                            "source_last_updated": data.docs[i].modifiedTime
+                            "source_last_updated": data.docs[i].lastEditedUtc
                         });
                     }
                     var xmlhttp = new XMLHttpRequest();
@@ -1025,22 +1027,33 @@ def chunks(iterable, batch_size=10):
         chunk = tuple(itertools.islice(it, batch_size))
 
 
+class GooglePickerUpload(BaseModel):
+    files: List[Any]
+    team: str
+    user: str
+    token: str
+
+
 @api.post("/google/process-documents")
-def process_google_documents(upload):
+def process_google_documents(upload: GooglePickerUpload):
     user_id = upload.user
     team_id = upload.team
+    integration = crud.get_user_integration(team_id, user_id, "gdrive")
     files_to_upload = [
         {
             "Id": file["file_id"],
             "MessageBody": json.dumps(
                 {
+                    "integration_id": integration.id,
                     "team_id": team_id,
                     "user_id": user_id,
                     "url": f"https://drive.google.com/file/d/{file['file_id']}",
                     "type": f"drive#file|{file['mime_type']}",
                     "name": file["file_name"],
                     "source_id": file["file_id"],
-                    "source_last_updated": file["source_last_updated"],
+                    "source_last_updated": datetime.datetime.fromtimestamp(
+                        file["source_last_updated"] / 1000
+                    ).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
                 }
             )
         } for file in upload.files
