@@ -858,6 +858,17 @@ def handle_app_home_opened(client, event, say):
     user_id = event["user"]
     result = client.users_info(user=user_id)
     team_id = result["user"]["team_id"]
+    slack_token = crud.get_user_integration(team_id, None, "slack")
+    if slack_token is None:
+        bot = installation_store.find_bot(
+            enterprise_id=None,
+            team_id=team_id,
+        )
+        crud.create_integration({
+            "team_id": team_id,
+            "type": "slack",
+            "token": bot.bot_token
+        })
     slack_user = crud.get_slack_user(team_id, user_id)
     if slack_user is None:
         team_name = result["team"]["name"]

@@ -349,11 +349,12 @@ def _should_index_slack_message(message):
     text = message.get("text")
     user = message.get("user")
     type = message.get("type")
+    cleaned_text = re.sub(r'http\S+', '', text) if text else None
     if not text or not user or type != "message":
         return False
-    elif "?" in text and len(text.split()) >= 15:
+    elif "?" in cleaned_text and len(text.split()) >= 15:
         return True
-    elif "https://" in text:
+    elif "https://" in text and len(text.split()) >= 15:
         return True
     else:
         return False
@@ -423,10 +424,22 @@ def extract_data_from_content_store(integration, content_store):
     elif type == "slack|text/plain":
         text = _get_slack_txt_document_text(integration, content_store)
     else:
-        return []
-    if not text:
-        return []
+        pass
     split_text = []
+    split_text.append({
+        "id": f"{team_id}-{content_store['source_id']}",
+        "text": content_store["name"],
+        "user_id": user_id,
+        "team_id": content_store["team_id"],
+        "text_type": f"title",
+        "last_updated": content_store["source_last_updated"],
+        "source_name": content_store["name"],
+        "source_id": content_store["source_id"],
+        "source_type": type,
+        "url": content_store["url"]
+    })
+    if not text:
+        return split_text
     chunks = re.split(REGEX_EXP, text)
     for idx, chunk in enumerate(chunks):
         split_text.append({
@@ -441,16 +454,4 @@ def extract_data_from_content_store(integration, content_store):
             "source_type": type,
             "url": content_store["url"]
         })
-    split_text.append({
-        "id": f"{team_id}-{content_store['source_id']}",
-        "text": content_store["name"],
-        "user_id": user_id,
-        "team_id": content_store["team_id"],
-        "text_type": f"title",
-        "last_updated": content_store["source_last_updated"],
-        "source_name": content_store["name"],
-        "source_id": content_store["source_id"],
-        "source_type": type,
-        "url": content_store["url"]
-    })
     return split_text
