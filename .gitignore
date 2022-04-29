@@ -5,3 +5,8 @@ __pycache__
 indexer/data
 api/data
 api/table_qa
+core/dist
+backend/shared
+*.whl
+core/build
+core/core.egg-info
