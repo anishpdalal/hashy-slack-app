@@ -105,11 +105,19 @@ def handle_member_join(client, event, say):
         queue.send_message(MessageBody=json.dumps(message))
 
 
+ACCEPTED_FILE_FORMATS = [
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/pdf",
+    "text/plain",
+]
+
 
 @app.event({"type": "message", "subtype": "file_share"})
 def handle_message_file_share(logger, event, say):
     for file in event["files"]:
         mimetype = file["mimetype"]
+        if mimetype not in ACCEPTED_FILE_FORMATS:
+            pass
         file_id = file["id"]
         user_id = file["user"]
         converted_pdf = file.get("converted_pdf")
