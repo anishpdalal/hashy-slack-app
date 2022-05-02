@@ -57,7 +57,7 @@ def handler(event, context):
             content_store["source_last_updated"] = last_updated.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
             upserts.append({
                 "MessageBody": json.dumps(content_store),
-                "Id": content_store["source_id"]
+                "Id": f"{content_store['source_id']}-{integration.id}"
             })
     
     logger.info(f"Upserting {len(upserts)} docs")
