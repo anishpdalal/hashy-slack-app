@@ -91,9 +91,7 @@ def _search_documents(team, embedding, text_type="content"):
     return results
 
 
-def _get_summary(text, query):
-    if not query.endswith("?"):
-        query = f"{query}?"
+def _get_answer_from_doc(text, query):
     prompt = "Answer the question based on the context below, and if the question can't be answered based on the context, say \"I don't know\"\n\nContext:\n{0}\n\n---\n\nQuestion: {1}\nAnswer:"
     response = openai.Completion.create(
         engine="text-davinci-002",
@@ -104,8 +102,25 @@ def _get_summary(text, query):
         frequency_penalty=0,
         presence_penalty=0
     )
-    summary_text = response.choices[0]["text"].strip()
-    return summary_text
+    answer = response.choices[0]["text"].strip()
+    return answer
+
+
+def _extract_surrounding_text(result):
+    try:
+        id = result["id"]
+        prefix = "-".join(id.split("-")[0:-1])
+        suffix = id.split("-")[-1]
+        position = int(suffix)
+        start = position - 1 if position != 0 else position
+        end = position + 1
+        ids = [f"{prefix}-{idx}" for idx in range(start, end+1)]
+        vectors = index.fetch(ids)["vectors"]
+        text = "\n".join([vectors.get(id, {}).get("metadata", {}).get("text", "") for id in ids])
+        return text
+    except Exception as e:
+        logger.error(e)
+        return result["text"]
 
 
 def handler(event, context):
@@ -145,7 +160,9 @@ def handler(event, context):
         results["body"]["slack_messages_results"] = _search_slack(team, query_embedding)
         results["body"]["content_results"] = _search_documents(team, query_embedding, text_type="content")
         if results["body"]["content_results"]:
-            results["body"]["summarized_result"] = _get_summary(results["body"]["content_results"][0]["text"], query)
+            top_result = results["body"]["content_results"][0]
+            top_result_text = _extract_surrounding_text(top_result)
+            results["body"]["summarized_result"] = _get_answer_from_doc(top_result_text, query)
         logger.info(results["body"])
         results["body"] = json.dumps(results["body"])
     return results
