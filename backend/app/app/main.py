@@ -117,7 +117,7 @@ def handle_message_file_share(logger, event, say):
     for file in event["files"]:
         mimetype = file["mimetype"]
         if mimetype not in ACCEPTED_FILE_FORMATS:
-            pass
+            continue
         file_id = file["id"]
         user_id = file["user"]
         converted_pdf = file.get("converted_pdf")
@@ -125,7 +125,9 @@ def handle_message_file_share(logger, event, say):
         file_name = file["name"]
         team_id = url.split("/")[4].split("-")[0]
         timestamp = file["timestamp"]
+        integration = crud.get_user_integration(team_id, None, "slack")
         message = {
+            "integration_id": integration.id,
             "team_id": team_id,
             "user_id": user_id,
             "url": url,
