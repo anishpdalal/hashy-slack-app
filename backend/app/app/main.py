@@ -881,7 +881,8 @@ def handle_app_home_opened(client, event, say):
         })
     slack_user = crud.get_slack_user(team_id, user_id)
     if slack_user is None:
-        team_name = result["team"]["name"]
+        team_info = client.team_info(team=team_id)
+        team_name = team_info["team"]["name"]
         crud.create_slack_user({
             "user_id": user_id,
             "team_name": team_name,
