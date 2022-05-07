@@ -147,7 +147,7 @@ def handler(event, context):
         if search_type == "auto_reply" or search_type == "channel":
             response = openai.Completion.create(
                 engine="text-davinci-002",
-                prompt=f"Condense the following question\n\nQuestion: {query}\nCondensed Question:",
+                prompt=f"Convert the question into a search query\n\nQuestion: I had a customer who called in a panic because she felt like her car would not be covered as it falls into the exotic car part of our policy. Is that covered?\nSearch Query: are exotic cars covered?\n\nQuestion: {query}\nSearch Query:",
                 temperature=0,
                 max_tokens=64,
                 top_p=1,
