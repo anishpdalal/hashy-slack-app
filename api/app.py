@@ -2,15 +2,17 @@ import json
 import logging
 import os
 
+import numpy as np
 import openai
 import pinecone
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder, SentenceTransformer
 
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 search_model = SentenceTransformer(os.environ["DATA_DIR"])
+cross_encoder = CrossEncoder(os.environ["CROSS_ENCODER_DIR"])
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 PINECONE_KEY = os.environ["PINECONE_KEY"]
@@ -18,7 +20,7 @@ pinecone.init(api_key=PINECONE_KEY, environment="us-west1-gcp")
 index = pinecone.Index(index_name="semantic-text-search")
 
 
-def _search_slack(team, embedding):
+def _search_slack(team, query, embedding):
     filter = {
         "team_id": {"$eq": team},
         "text_type": {"$eq": "content"},
@@ -35,15 +37,21 @@ def _search_slack(team, embedding):
     )
     results = []
     matches = query_results["results"][0]["matches"]
-    for match in matches:
+    cross_inp = [[query, match["metadata"]["text"]] for match in matches]
+    cross_scores = cross_encoder.predict(cross_inp)
+    for idx, score in enumerate(cross_scores):
+        matches[idx]["reranked_score"] = float(score)
+    reranked_matches = [x for x in sorted(matches, key=lambda x: x["reranked_score"], reverse=True)]
+    for match in reranked_matches:
         metadata = match["metadata"]
-        if match["score"] >= 0.3:            
+        if match["reranked_score"] >= 1:            
             results.append({
                 "id": match["id"],
                 "name": metadata["source_name"],
                 "url": metadata.get("url"),
                 "text": metadata["text"],
                 "last_updated": metadata["last_updated"].strftime("%m/%d/%Y"),
+                "reranked_score": match["reranked_score"],
                 "semantic_score": match["score"],
                 "source_type": metadata["source_type"],
                 "answer": metadata.get("answer"),
@@ -58,7 +66,7 @@ def _convert_date_to_str(d):
     return d
 
 
-def _search_documents(team, embedding, text_type="content"):
+def _search_documents(team, query, embedding, text_type="content"):
     filter = {
         "team_id": {"$eq": team},
         "text_type": {"$eq": text_type},
@@ -75,15 +83,21 @@ def _search_documents(team, embedding, text_type="content"):
     )
     results = []
     matches = query_results["results"][0]["matches"]
-    for match in matches:
+    cross_inp = [[query, match["metadata"]["text"]] for match in matches]
+    cross_scores = cross_encoder.predict(cross_inp)
+    for idx, score in enumerate(cross_scores):
+        matches[idx]["reranked_score"] = float(score)
+    reranked_matches = [x for x in sorted(matches, key=lambda x: x["reranked_score"], reverse=True)]
+    for match in reranked_matches:
         metadata = match["metadata"]
-        if match["score"] >= 0.3:
+        if match["reranked_score"] >= 1:
            results.append({
                 "id": match["id"],
                 "name": _convert_date_to_str(metadata["source_name"]),
                 "url": metadata["url"],
                 "text": metadata["text"],
                 "last_updated": metadata["last_updated"].strftime("%m/%d/%Y"),
+                "reranked_score": match["reranked_score"],
                 "semantic_score": match["score"],
                 "source_type": metadata["source_type"],
                 "source_id": metadata["source_id"]
@@ -157,8 +171,8 @@ def handler(event, context):
             query = response["choices"][0]["text"].strip()
             results["body"]["modified_query"] = query
         query_embedding = search_model.encode([query])
-        results["body"]["slack_messages_results"] = _search_slack(team, query_embedding)
-        results["body"]["content_results"] = _search_documents(team, query_embedding, text_type="content")
+        results["body"]["slack_messages_results"] = _search_slack(team, query, query_embedding)
+        results["body"]["content_results"] = _search_documents(team, query, query_embedding, text_type="content")
         if results["body"]["content_results"]:
             top_result = results["body"]["content_results"][0]
             top_result_text = _extract_surrounding_text(top_result)
