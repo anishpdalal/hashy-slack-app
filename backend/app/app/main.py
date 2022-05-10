@@ -114,33 +114,34 @@ ACCEPTED_FILE_FORMATS = [
 
 @app.event({"type": "message", "subtype": "file_share"})
 def handle_message_file_share(logger, event, say):
-    for file in event["files"]:
-        mimetype = file["mimetype"]
-        if mimetype not in ACCEPTED_FILE_FORMATS:
-            continue
-        file_id = file["id"]
-        user_id = file["user"]
-        converted_pdf = file.get("converted_pdf")
-        url = file["url_private"] if converted_pdf is None else converted_pdf
-        file_name = file["name"]
-        team_id = url.split("/")[4].split("-")[0]
-        timestamp = file["timestamp"]
-        integration = crud.get_user_integration(team_id, None, "slack")
-        message = {
-            "integration_id": integration.id,
-            "team_id": team_id,
-            "user_id": user_id,
-            "url": url,
-            "type": f"slack|{mimetype}",
-            "name": file_name,
-            "source_id": file_id,
-            "source_last_updated": datetime.datetime.fromtimestamp(timestamp).strftime(
-                "%Y-%m-%dT%H:%M:%S.%fZ"
-            )
-        }
-        logger.info(message)
-        say(f"Processing File {file_name}")
-        queue.send_message(MessageBody=json.dumps(message))
+    pass
+    # for file in event["files"]:
+    #     mimetype = file["mimetype"]
+    #     if mimetype not in ACCEPTED_FILE_FORMATS:
+    #         continue
+    #     file_id = file["id"]
+    #     user_id = file["user"]
+    #     converted_pdf = file.get("converted_pdf")
+    #     url = file["url_private"] if converted_pdf is None else converted_pdf
+    #     file_name = file["name"]
+    #     team_id = url.split("/")[4].split("-")[0]
+    #     timestamp = file["timestamp"]
+    #     integration = crud.get_user_integration(team_id, None, "slack")
+    #     message = {
+    #         "integration_id": integration.id,
+    #         "team_id": team_id,
+    #         "user_id": user_id,
+    #         "url": url,
+    #         "type": f"slack|{mimetype}",
+    #         "name": file_name,
+    #         "source_id": file_id,
+    #         "source_last_updated": datetime.datetime.fromtimestamp(timestamp).strftime(
+    #             "%Y-%m-%dT%H:%M:%S.%fZ"
+    #         )
+    #     }
+    #     logger.info(message)
+    #     say(f"Processing File {file_name}")
+    #     queue.send_message(MessageBody=json.dumps(message))
 
 
 @app.event({"type": "message"})
