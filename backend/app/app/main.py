@@ -126,7 +126,7 @@ def handle_message_channel(event, say, client):
         user = event.get("user")
         query = event.get("text")
         cleaned_query = re.sub(r'http\S+', '', query) if query else None
-        if (query and "?" in cleaned_query and user and team and len(cleaned_query.split()) > 10) or (team == "T02KCNMCUHE" and query):
+        if (query and "?" in cleaned_query and user and team) or (query and user and team == "T02KCNMCUHE"):
             response = requests.post(
                 f"{os.environ['API_URL']}/search",
                 data=json.dumps(
@@ -141,11 +141,10 @@ def handle_message_channel(event, say, client):
                 )
             ).json()
             modified_query = response.get("modified_query")
-            slack_scores = [res["semantic_score"] for res in response.get("slack_messages_results", [])]
-            max_slack_score = max(slack_scores) if len(slack_scores) else 0
-            if max_slack_score >= 0.60 or (team == "T02KCNMCUHE" and len(slack_scores)> 0):
+            slack_message_results = response.get("slack_messages_results", [])
+            if len(slack_message_results) > 0:
                 blocks = []
-                top_slack_result = response["slack_messages_results"][0]
+                top_slack_result = slack_message_results[0]
                 if top_slack_result["source_type"] == "slack_message":
                     channel_link = f"<{top_slack_result['url']}|{top_slack_result['name']}>"
                     blocks.append(
@@ -153,7 +152,7 @@ def handle_message_channel(event, say, client):
                             "type": "section",
                             "text": {
                                 "type": "mrkdwn",
-                                "text": f"Found a related slack message in {channel_link}."
+                                "text": f"Found related slack conversations in {channel_link} for {modified_query}"
                             }
                         }
                     )
