@@ -4,7 +4,7 @@ __pycache__
 *.env
 indexer/data
 api/data
-api/table_qa
+api/cross_encoder
 core/dist
 backend/shared
 *.whl

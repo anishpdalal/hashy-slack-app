@@ -28,7 +28,9 @@ RUN python3 -m pip install --no-cache-dir --upgrade -r /function/requirements.tx
 
 COPY app.py /function
 RUN mkdir -p /mnt/data
+RUN mkdir -p /mnt/cross_encoder
 COPY data /mnt/data
+COPY cross_encoder /mnt/cross_encoder
 WORKDIR /function
 ENTRYPOINT [ "python3", "-m", "awslambdaric" ]
 CMD [ "app.handler" ]

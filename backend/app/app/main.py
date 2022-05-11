@@ -115,33 +115,6 @@ ACCEPTED_FILE_FORMATS = [
 @app.event({"type": "message", "subtype": "file_share"})
 def handle_message_file_share(logger, event, say):
     pass
-    # for file in event["files"]:
-    #     mimetype = file["mimetype"]
-    #     if mimetype not in ACCEPTED_FILE_FORMATS:
-    #         continue
-    #     file_id = file["id"]
-    #     user_id = file["user"]
-    #     converted_pdf = file.get("converted_pdf")
-    #     url = file["url_private"] if converted_pdf is None else converted_pdf
-    #     file_name = file["name"]
-    #     team_id = url.split("/")[4].split("-")[0]
-    #     timestamp = file["timestamp"]
-    #     integration = crud.get_user_integration(team_id, None, "slack")
-    #     message = {
-    #         "integration_id": integration.id,
-    #         "team_id": team_id,
-    #         "user_id": user_id,
-    #         "url": url,
-    #         "type": f"slack|{mimetype}",
-    #         "name": file_name,
-    #         "source_id": file_id,
-    #         "source_last_updated": datetime.datetime.fromtimestamp(timestamp).strftime(
-    #             "%Y-%m-%dT%H:%M:%S.%fZ"
-    #         )
-    #     }
-    #     logger.info(message)
-    #     say(f"Processing File {file_name}")
-    #     queue.send_message(MessageBody=json.dumps(message))
 
 
 @app.event({"type": "message"})
@@ -153,7 +126,7 @@ def handle_message_channel(event, say, client):
         user = event.get("user")
         query = event.get("text")
         cleaned_query = re.sub(r'http\S+', '', query) if query else None
-        if query and "?" in cleaned_query and user and team and len(cleaned_query.split()) > 10:
+        if (query and "?" in cleaned_query and user and team and len(cleaned_query.split()) > 10) or (team == "T02KCNMCUHE" and query):
             response = requests.post(
                 f"{os.environ['API_URL']}/search",
                 data=json.dumps(
@@ -167,10 +140,10 @@ def handle_message_channel(event, say, client):
                     }
                 )
             ).json()
-            modified_query = response["modified_query"]
+            modified_query = response.get("modified_query")
             slack_scores = [res["semantic_score"] for res in response.get("slack_messages_results", [])]
             max_slack_score = max(slack_scores) if len(slack_scores) else 0
-            if max_slack_score >= 0.60:
+            if max_slack_score >= 0.60 or (team == "T02KCNMCUHE" and len(slack_scores)> 0):
                 blocks = []
                 top_slack_result = response["slack_messages_results"][0]
                 if top_slack_result["source_type"] == "slack_message":
