@@ -7,6 +7,7 @@ import os
 import pinecone
 import pytz
 from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TextClassificationPipeline
 
 from core.integration import reader
 from core.db import crud
@@ -28,7 +29,11 @@ def handler(event, context):
     PINECONE_KEY = os.environ["PINECONE_KEY"]
     pinecone.init(api_key=PINECONE_KEY, environment="us-west1-gcp")
     index = pinecone.Index(index_name="semantic-text-search")
-    search_model = SentenceTransformer(os.environ["DATA_DIR"])
+    search_model = SentenceTransformer("/mnt/bi_encoder")
+    tokenizer = AutoTokenizer.from_pretrained("/mnt/tokenizer")
+    model = AutoModelForSequenceClassification.from_pretrained("/mnt/intention_model")
+    pipe = TextClassificationPipeline(model=model, tokenizer=tokenizer)
+
     for record in event['Records']:
         if isinstance(record["body"], str):
             content_store = json.loads(record["body"])
@@ -57,6 +62,18 @@ def handler(event, context):
             text = [d["text"] for d in data]
         if not text:
             continue
+        if content_store_type == "slack_channel":
+            filtered_data = []
+            filtered_text = []
+            classifications = pipe(text, truncation=True, max_length=512)
+            for i, classification in enumerate(classifications):
+                label = classification["label"]
+                if label == "LABEL_1":
+                    filtered_data.append(data[i])
+                    filtered_text.append(text[i])
+            data = filtered_data
+            text = filtered_text
+
         embeddings = search_model.encode(text).tolist()
         num_vectors = content_store_db.num_vectors if content_store_db else 0
         if not content_store_db:

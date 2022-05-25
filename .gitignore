@@ -3,8 +3,12 @@ __pycache__
 .vscode
 *.env
 indexer/data
+indexer/bi_encoder
+indexer/intention_model
 api/data
+api/bi_encoder
 api/cross_encoder
+api/intention_model
 core/dist
 backend/shared
 *.whl

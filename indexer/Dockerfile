@@ -29,8 +29,12 @@ COPY ./dist/core-0.1.0-py3-none-any.whl /function/core-0.1.0-py3-none-any.whl
 RUN python3 -m pip install --no-cache-dir /function/core-0.1.0-py3-none-any.whl
 
 COPY app.py /function
-RUN mkdir -p /mnt/data
-COPY data /mnt/data
+RUN mkdir -p /mnt/bi_encoder
+COPY bi_encoder /mnt/bi_encoder
+RUN mkdir -p /mnt/tokenizer
+RUN python3 -c "from transformers import AutoTokenizer; tokenizer = AutoTokenizer.from_pretrained('distilbert-base-uncased'); tokenizer.save_pretrained('/mnt/tokenizer');"
+RUN mkdir -p /mnt/intention_model
+COPY intention_model /mnt/intention_model
 WORKDIR /function
 ENTRYPOINT [ "python3", "-m", "awslambdaric" ]
 CMD [ "app.handler" ]
