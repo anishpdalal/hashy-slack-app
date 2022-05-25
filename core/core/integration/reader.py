@@ -349,16 +349,9 @@ def _should_index_slack_message(message):
     text = message.get("text")
     user = message.get("user")
     type = message.get("type")
-    cleaned_text = re.sub(r'http\S+', '', text) if text else None
     if not text or not user or type != "message":
         return False
-    elif "?" in cleaned_text and len(text.split()) >= 15:
-        return True
-    elif "https://" in text and len(text.split()) >= 15:
-        return True
-    else:
-        return False
-    
+    return True
     
 
 def _get_slack_channel_messages(integration, content_store):

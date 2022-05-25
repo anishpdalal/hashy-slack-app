@@ -2,17 +2,20 @@ import json
 import logging
 import os
 
-import numpy as np
 import openai
 import pinecone
 from sentence_transformers import CrossEncoder, SentenceTransformer
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TextClassificationPipeline
 
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-search_model = SentenceTransformer(os.environ["DATA_DIR"])
-cross_encoder = CrossEncoder(os.environ["CROSS_ENCODER_DIR"])
+search_model = SentenceTransformer("/mnt/bi_encoder")
+cross_encoder = CrossEncoder("/mnt/cross_encoder")
+tokenizer = AutoTokenizer.from_pretrained("/mnt/tokenizer")
+model = AutoModelForSequenceClassification.from_pretrained("/mnt/intention_model")
+pipe = TextClassificationPipeline(model=model, tokenizer=tokenizer)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 PINECONE_KEY = os.environ["PINECONE_KEY"]
@@ -21,6 +24,7 @@ index = pinecone.Index(index_name="semantic-text-search")
 
 
 def _search_slack(team, query, embedding):
+    threshold = 0 if team == "T015E1A6N6L" or team == "T2HM3H78W" or team == "T02MGVB1HL5" else 1
     filter = {
         "team_id": {"$eq": team},
         "text_type": {"$eq": "content"},
@@ -44,7 +48,7 @@ def _search_slack(team, query, embedding):
     reranked_matches = [x for x in sorted(matches, key=lambda x: x["reranked_score"], reverse=True)]
     for match in reranked_matches:
         metadata = match["metadata"]
-        if match["reranked_score"] >= 1:            
+        if match["reranked_score"] >= threshold:            
             results.append({
                 "id": match["id"],
                 "name": metadata["source_name"],
@@ -67,6 +71,7 @@ def _convert_date_to_str(d):
 
 
 def _search_documents(team, query, embedding, text_type="content"):
+    threshold = 0 if team == "T015E1A6N6L" or team == "T2HM3H78W" or team == "T02MGVB1HL5" else 0.65
     filter = {
         "team_id": {"$eq": team},
         "text_type": {"$eq": text_type},
@@ -90,7 +95,7 @@ def _search_documents(team, query, embedding, text_type="content"):
     reranked_matches = [x for x in sorted(matches, key=lambda x: x["reranked_score"], reverse=True)]
     for match in reranked_matches:
         metadata = match["metadata"]
-        if match["reranked_score"] >= 0.65:
+        if match["reranked_score"] >= threshold:
            results.append({
                 "id": match["id"],
                 "name": _convert_date_to_str(metadata["source_name"]),
@@ -159,16 +164,21 @@ def handler(event, context):
         results["body"]["modified_query"] = None
         results["body"]["query_id"] = body.get("query_id")
         if search_type == "channel":
-            res = openai.Completion.create(
-                model="curie:ft-personal-2022-05-10-21-11-23",
-                prompt=query + '\n\n###\n\n',
-                max_tokens=1,
-                temperature=0,
-                logprobs=2
-            )
-            decision = res['choices'][0]['text'].strip()
-            if decision == "reject":
-                return results
+            if team == "T015E1A6N6L" or team == "T2HM3H78W" or team == "T02MGVB1HL5":
+                label = pipe(query, truncation=True, max_length=512)[0]["label"]
+                if label == "LABEL_0":
+                    return results
+            else:
+                res = openai.Completion.create(
+                    model="curie:ft-personal-2022-05-10-21-11-23",
+                    prompt=query + '\n\n###\n\n',
+                    max_tokens=1,
+                    temperature=0,
+                    logprobs=2
+                )
+                decision = res['choices'][0]['text'].strip()
+                if decision == "reject":
+                    return results
             response = openai.Completion.create(
                 engine="text-davinci-002",
                 prompt=f"Convert the question into a search query\n\nQuestion: I had a customer who called in a panic because she felt like her car would not be covered as it falls into the exotic car part of our policy. Is that covered?\nSearch Query: are exotic cars covered?\n\nQuestion: {query}\nSearch Query:",
