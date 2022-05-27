@@ -24,7 +24,7 @@ index = pinecone.Index(index_name="semantic-text-search")
 
 
 def _search_slack(team, query, embedding):
-    threshold = 0 if team == "T015E1A6N6L" or team == "T2HM3H78W" or team == "T02MGVB1HL5" else 1
+    threshold = 0 if team == "T015E1A6N6L" or team == "T02KCNMCUHE" or team == "T02MGVB1HL5" else 1
     filter = {
         "team_id": {"$eq": team},
         "text_type": {"$eq": "content"},
@@ -71,7 +71,7 @@ def _convert_date_to_str(d):
 
 
 def _search_documents(team, query, embedding, text_type="content"):
-    threshold = 0 if team == "T015E1A6N6L" or team == "T2HM3H78W" or team == "T02MGVB1HL5" else 0.65
+    threshold = 0 if team == "T015E1A6N6L" or team == "T02KCNMCUHE" or team == "T02MGVB1HL5" else 0.65
     filter = {
         "team_id": {"$eq": team},
         "text_type": {"$eq": text_type},
@@ -157,15 +157,26 @@ def handler(event, context):
     if path == "/ping":
         return results
     elif path == "/search":
-        team = body["team"]
+        team = body["team_id"]
         query = body["query"]
-        search_type = body.get("search_type")
+        event_type = body.get("event_type")
         results["body"]["query"] = query
         results["body"]["modified_query"] = None
         results["body"]["query_id"] = body.get("query_id")
-        if search_type == "channel":
-            if team == "T015E1A6N6L" or team == "T2HM3H78W" or team == "T02MGVB1HL5":
-                label = pipe(query, truncation=True, max_length=512)[0]["label"]
+        if event_type == "CHANNEL_SEARCH":
+            if team == "T015E1A6N6L" or team == "T02KCNMCUHE" or team == "T02MGVB1HL5":
+                pred = pipe(query, truncation=True, max_length=512)[0]
+                label = pred["label"]
+                intention_score = pred["score"]
+                logger.info({
+                    "team_id": team,
+                    "user_id": body["user_id"],
+                    "query": query,
+                    "query_id": body.get("query_id"),
+                    "event_type": "INTENTION_CLASSIFICATION",
+                    "score": intention_score,
+                    "label": label,
+                })
                 if label == "LABEL_0":
                     return results
             else:
@@ -191,12 +202,24 @@ def handler(event, context):
             query = response["choices"][0]["text"].strip()
             results["body"]["modified_query"] = query
         query_embedding = search_model.encode([query])
-        results["body"]["slack_messages_results"] = _search_slack(team, query, query_embedding)
-        results["body"]["content_results"] = _search_documents(team, query, query_embedding, text_type="content")
+        slack_messages_results = _search_slack(team, query, query_embedding)
+        results["body"]["slack_messages_results"] = slack_messages_results
+        search_documents = _search_documents(team, query, query_embedding, text_type="content")
+        results["body"]["content_results"] = search_documents
         if results["body"]["content_results"]:
             top_result = results["body"]["content_results"][0]
             top_result_text = _extract_surrounding_text(top_result)
             results["body"]["summarized_result"] = _get_answer_from_doc(top_result_text, query)
-        logger.info(results["body"])
+        logger.info({
+            "team_id": team,
+            "user_id": body["user_id"],
+            "query": query,
+            "query_id": body.get("query_id"),
+            "event_type": "PREDICTION",
+            "num_content_results": len(search_documents),
+            "num_slack_results": len(slack_messages_results),
+            "top_slack_score": slack_messages_results[0]["reranked_score"] if slack_messages_results else None,
+            "top_content_result_score": search_documents[0]["reranked_score"] if search_documents else None,
+        })
         results["body"] = json.dumps(results["body"])
     return results
