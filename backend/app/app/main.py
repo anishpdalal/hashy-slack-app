@@ -127,16 +127,17 @@ def handle_message_channel(event, say, client):
         query = event.get("text")
         cleaned_query = re.sub(r'http\S+', '', query) if query else None
         if (query and "?" in cleaned_query and user and team) or (query and user and team == "T02KCNMCUHE") or (query and user and team == "T015E1A6N6L") or (query and user and team == "T02MGVB1HL5"):
+            query_id = str(uuid.uuid4())
             response = requests.post(
                 f"{os.environ['API_URL']}/search",
                 data=json.dumps(
                     {
-                        "query_id": str(uuid.uuid4()),
-                        "team": team,
+                        "query_id": query_id,
+                        "team_id": team,
                         "query": query,
-                        "user": user,
+                        "user_id": user,
                         "count": 10,
-                        "search_type": "channel"
+                        "event_type": "CHANNEL_SEARCH"
                     }
                 )
             ).json()
@@ -152,7 +153,7 @@ def handle_message_channel(event, say, client):
                             "type": "section",
                             "text": {
                                 "type": "mrkdwn",
-                                "text": f"Found related slack conversations in {channel_link} for {modified_query}"
+                                "text": f"Found a related slack conversation in {channel_link} for {modified_query}"
                             }
                         }
                     )
@@ -169,7 +170,7 @@ def handle_message_channel(event, say, client):
                             }
                         }
                     )
-                blocks.append(
+                blocks.extend([
                     {
                         "type": "actions",
                         "elements": [
@@ -184,9 +185,80 @@ def handle_message_channel(event, say, client):
                                 "action_id": "view_more_button"
                             }
 			            ]
-		            }
-                )
+		            },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": "Rate the response to improve Hashy"
+                        }
+		            },
+                    {
+                        "type": "actions",
+                        "elements": [
+                            {
+                                "type": "button",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": ":thumbsup:",
+                                    "emoji": True
+                                },
+                                "value": query_id,
+                                "action_id": "upvote"
+                            },
+                            {
+                                "type": "button",
+                                "text": {
+                                    "type": "plain_text",
+                                    "text": ":thumbsdown:",
+                                    "emoji": True
+                                },
+                                "value": query_id,
+                                "action_id": "downvote"
+                            }
+                        ]
+                    }
+                ])
                 client.chat_postMessage(channel=channel, thread_ts=ts, blocks=blocks)
+
+
+@app.action("upvote")
+def handle_engagement_click(ack, body, client):
+    ack()
+    query_id = body["actions"][0]["value"]
+    user_id = body["user"]["id"]
+    team_id = body["team"]["id"]
+    event_type = "UPVOTE"
+    requests.post(
+        f"{os.environ['API_URL']}/ping",
+        data=json.dumps(
+            {
+                "query_id": query_id,
+                "team_id": team_id,
+                "user_id": user_id,
+                "event_type": event_type
+            }
+        )
+    )
+
+@app.action("downvote")
+def handle_engagement_click(ack, body, client):
+    ack()
+    query_id = body["actions"][0]["value"]
+    user_id = body["user"]["id"]
+    team_id = body["team"]["id"]
+    event_type = "DOWNVOTE"
+    requests.post(
+        f"{os.environ['API_URL']}/ping",
+        data=json.dumps(
+            {
+                "query_id": query_id,
+                "team_id": team_id,
+                "user_id": user_id,
+                "event_type": event_type
+            }
+        )
+    )
 
 
 @app.action("view_more_button")
@@ -237,7 +309,7 @@ def handle_view_more_click(ack, body, client):
             }
         }
     ]
-    result_blocks = answer_query(event, query, type="auto_reply_click")
+    result_blocks = answer_query(event, query, type="AUTO_REPLY_CLICK")
     blocks.extend(result_blocks)
     client.views_update(
         hash=response["view"]["hash"],
@@ -304,22 +376,16 @@ def handle_submit_answer_view(ack, body, client, view):
 def answer_query(event, query, type=None):
     team = event["team"]
     user = event["user"]
-    logger.info(json.dumps({
-        "user": user,
-        "team": team,
-        "query": query
-    }))
-    
     response = requests.post(
         f"{os.environ['API_URL']}/search",
         data=json.dumps(
             {
                 "query_id": str(uuid.uuid4()),
-                "team": team,
+                "team_id": team,
                 "query": query,
-                "user": user,
+                "user_id": user,
                 "count": 10,
-                "search_type": type
+                "event_type": type
             }
         )
     ).json()
@@ -770,7 +836,7 @@ def help_command(ack, respond, command, client):
                 }
             }
         ]
-        result_blocks = answer_query(event, command_text, type="command_search")
+        result_blocks = answer_query(event, command_text, type="COMMAND_SEARCH")
         blocks.extend(result_blocks)
         blocks.extend([
             {
