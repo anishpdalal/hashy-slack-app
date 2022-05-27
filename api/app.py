@@ -188,6 +188,15 @@ def handler(event, context):
                     logprobs=2
                 )
                 decision = res['choices'][0]['text'].strip()
+                logger.info({
+                    "team_id": team,
+                    "user_id": body["user_id"],
+                    "query": query,
+                    "query_id": body.get("query_id"),
+                    "event_type": "INTENTION_CLASSIFICATION",
+                    "score": None,
+                    "label": decision,
+                })
                 if decision == "reject":
                     return results
             response = openai.Completion.create(
