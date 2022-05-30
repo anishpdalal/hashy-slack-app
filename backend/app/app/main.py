@@ -6,6 +6,7 @@ import logging
 import os
 import re
 from typing import Any, List
+from urllib.parse import urlparse
 import uuid
 
 import boto3
@@ -143,11 +144,17 @@ def handle_message_channel(event, say, client):
             ).json()
             modified_query = response.get("modified_query")
             slack_message_results = response.get("slack_messages_results", [])
-            if len(slack_message_results) > 0:
+            content_results = response.get("content_results", [])
+            source_ids = [result["source_id"] for result in content_results]
+            content_stores = crud.get_content_stores(source_ids) or []
+            content_store_user_mapping = {content_store.source_id: content_store.is_boosted for content_store in content_stores}
+            filtered_content_results = [result for result in content_results if content_store_user_mapping.get(result["source_id"])]
+            results = filtered_content_results + slack_message_results
+            if len(results) > 0:
                 blocks = []
-                top_slack_result = slack_message_results[0]
-                if top_slack_result["source_type"] == "slack_message":
-                    channel_link = f"<{top_slack_result['url']}|{top_slack_result['name']}>"
+                top_result = results[0]
+                if top_result["source_type"] == "slack_message":
+                    channel_link = f"<{top_result['url']}|{top_result['name']}>"
                     blocks.append(
                         {
                             "type": "section",
@@ -157,16 +164,29 @@ def handle_message_channel(event, say, client):
                             }
                         }
                     )
-                else:
-                    source_name = top_slack_result["name"]
-                    question = top_slack_result["text"]
-                    answer = top_slack_result["answer"]
+                elif top_result["source_type"] == "answer":
+                    source_name = top_result["name"]
+                    question = top_result["text"]
+                    answer = top_result["answer"]
                     blocks.append(
                         {
                             "type": "section",
                             "text": {
                                 "type": "mrkdwn",
                                 "text": f"Found a related answer from {source_name} \n\n_Answer_: {answer}\n\n_Topic_: {question}"
+                            }
+                        }
+                    )
+                else:
+                    source_name = top_result["name"]
+                    source_url = top_result["url"]
+                    source_text = top_result["text"]
+                    blocks.append(
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"Found related content from <{source_url}|{source_name}> \n\n{source_text}"
                             }
                         }
                     )
@@ -396,7 +416,7 @@ def answer_query(event, query, type=None):
     all_results = slack_messages_results + content_results
     source_ids = [result["source_id"] for result in content_results + title_results]
     content_stores = crud.get_content_stores(source_ids) or []
-    content_store_user_mapping = {content_store.source_id: content_store.user_ids for content_store in content_stores}
+    content_store_user_mapping = {content_store.source_id: {"users": content_store.user_ids, "boosted": content_store.is_boosted} for content_store in content_stores}
     if all_results:
         top_result = max(slack_messages_results + content_results, key=lambda x: x["semantic_score"])
         top_score = int(top_result["semantic_score"] * 100)  
@@ -482,7 +502,9 @@ def answer_query(event, query, type=None):
         else:
             pass
 
-
+    boosted_content_results = [res for res in content_results if content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
+    non_boosted_content_results = [res for res in content_results if not content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
+    content_results = boosted_content_results + non_boosted_content_results
     if content_results:
         blocks.append({
 			"type": "header",
@@ -502,10 +524,10 @@ def answer_query(event, query, type=None):
                     }
                 }
             )
-    
     for idx, result in enumerate(content_results):
         content_source_id = result["source_id"]
-        if user not in content_store_user_mapping.get(content_source_id, []):
+        if user not in content_store_user_mapping.get(content_source_id, {}).get("users", []) \
+                and not content_store_user_mapping.get(content_source_id, {}).get("boosted", False):
             continue
         if idx != 0:
             blocks.append({"type": "divider"})
@@ -692,6 +714,13 @@ def help_command(ack, respond, command, client):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
+                        "text": f"To make a document into a public key document, enter `/hashy share <document url>`"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
                         "text": f"<https://calendly.com/taherhassonjee/hashy-onboarding|Schedule an Onboarding Call>"
                     }
                 },
@@ -792,6 +821,28 @@ def help_command(ack, respond, command, client):
                 }
             }
         )
+    elif command_text.startswith("share"):
+        content_store_url = command_text.split(" ")[1]
+        parsed_url = urlparse(content_store_url)
+
+        if "notion.so" in parsed_url.netloc:
+            source_id = str(uuid.UUID(parsed_url.path.split("/")[-1]))
+        elif "google.com" in parsed_url.netloc:
+            path = parsed_url.path
+            split_path = path.split("/")
+            idx = split_path.index("d") + 1
+            source_id = split_path[idx]
+        else:
+            client.chat_postMessage(channel=user, text=f"Could not process document: {content_store_url}.")
+            return
+        content_store = crud.get_content_store(source_id)
+        users = content_store.user_ids
+        if user not in users:
+            client.chat_postMessage(channel=user, text=f"Could not add document as key doc. It needs to be shared with your integration.")
+            return
+        crud.update_content_store(source_id, {"is_boosted": True})
+        client.chat_postMessage(channel=user, text=f"Added key doc")
+
     else:
         event = {
             "team": team,
