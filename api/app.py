@@ -164,7 +164,7 @@ def handler(event, context):
         results["body"]["modified_query"] = None
         results["body"]["query_id"] = body.get("query_id")
         if event_type == "CHANNEL_SEARCH":
-            if team == "T015E1A6N6L" or team == "T02KCNMCUHE" or team == "T02MGVB1HL5":
+            if team == "T015E1A6N6L" or team == "T02KCNMCUHE" or team == "T02MGVB1HL5" or team == "TB845T3TN":
                 pred = pipe(query, truncation=True, max_length=512)[0]
                 label = pred["label"]
                 intention_score = pred["score"]
