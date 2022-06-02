@@ -502,8 +502,8 @@ def answer_query(event, query, type=None):
         else:
             pass
 
-    boosted_content_results = [res for res in content_results if content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
-    non_boosted_content_results = [res for res in content_results if not content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
+    boosted_content_results = [result for result in content_results if content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
+    non_boosted_content_results = [result for result in content_results if not content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
     content_results = boosted_content_results + non_boosted_content_results
     if content_results:
         blocks.append({
