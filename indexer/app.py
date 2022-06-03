@@ -117,7 +117,7 @@ def handler(event, context):
                 data[i]["id"],
                 embeddings[i],
                 {
-                    "text": data[i]["text"],
+                    "text": data[i]["text"][0:1500],
                     "team_id": data[i]["team_id"],
                     "url": data[i]["url"],
                     "text_type": data[i]["text_type"],
