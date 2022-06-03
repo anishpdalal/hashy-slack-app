@@ -164,41 +164,20 @@ def handler(event, context):
         results["body"]["modified_query"] = None
         results["body"]["query_id"] = body.get("query_id")
         if event_type == "CHANNEL_SEARCH":
-            if team == "T015E1A6N6L" or team == "T02KCNMCUHE" or team == "T02MGVB1HL5" or team == "TB845T3TN":
-                pred = pipe(query, truncation=True, max_length=512)[0]
-                label = pred["label"]
-                intention_score = pred["score"]
-                logger.info({
-                    "team_id": team,
-                    "user_id": body["user_id"],
-                    "query": query,
-                    "query_id": body.get("query_id"),
-                    "event_type": "INTENTION_CLASSIFICATION",
-                    "score": intention_score,
-                    "label": label,
-                })
-                if label == "LABEL_0":
-                    return results
-            else:
-                res = openai.Completion.create(
-                    model="curie:ft-personal-2022-05-10-21-11-23",
-                    prompt=query + '\n\n###\n\n',
-                    max_tokens=1,
-                    temperature=0,
-                    logprobs=2
-                )
-                decision = res['choices'][0]['text'].strip()
-                logger.info({
-                    "team_id": team,
-                    "user_id": body["user_id"],
-                    "query": query,
-                    "query_id": body.get("query_id"),
-                    "event_type": "INTENTION_CLASSIFICATION",
-                    "score": None,
-                    "label": decision,
-                })
-                if decision == "reject":
-                    return results
+            pred = pipe(query, truncation=True, max_length=512)[0]
+            label = pred["label"]
+            intention_score = pred["score"]
+            logger.info({
+                "team_id": team,
+                "user_id": body["user_id"],
+                "query": query,
+                "query_id": body.get("query_id"),
+                "event_type": "INTENTION_CLASSIFICATION",
+                "score": intention_score,
+                "label": label,
+            })
+            if label == "LABEL_0":
+                return results
             response = openai.Completion.create(
                 engine="text-davinci-002",
                 prompt=f"Convert the question into a search query\n\nQuestion: I had a customer who called in a panic because she felt like her car would not be covered as it falls into the exotic car part of our policy. Is that covered?\nSearch Query: are exotic cars covered?\n\nQuestion: {query}\nSearch Query:",
