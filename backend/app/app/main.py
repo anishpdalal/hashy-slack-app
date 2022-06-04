@@ -826,7 +826,7 @@ def help_command(ack, respond, command, client):
         parsed_url = urlparse(content_store_url)
 
         if "notion.so" in parsed_url.netloc:
-            source_id = str(uuid.UUID(parsed_url.path.split("/")[-1]))
+            source_id = str(uuid.UUID(parsed_url.path.split("/")[-1].split("-")[-1]))
         elif "google.com" in parsed_url.netloc:
             path = parsed_url.path
             split_path = path.split("/")
@@ -836,6 +836,9 @@ def help_command(ack, respond, command, client):
             client.chat_postMessage(channel=user, text=f"Could not process document: {content_store_url}.")
             return
         content_store = crud.get_content_store(source_id)
+        if not content_store:
+            client.chat_postMessage(channel=user, text=f"Could not find document: {content_store_url}. It needs to be shared with your integration.")
+            return
         users = content_store.user_ids
         if user not in users:
             client.chat_postMessage(channel=user, text=f"Could not add document as key doc. It needs to be shared with your integration.")
