@@ -127,7 +127,7 @@ def handle_message_channel(event, say, client):
         user = event.get("user")
         query = event.get("text")
         cleaned_query = re.sub(r'http\S+', '', query) if query else None
-        if (query and "?" in cleaned_query and user and team) or (query and user and team == "T02KCNMCUHE") or (query and user and team == "T015E1A6N6L") or (query and user and team == "T02MGVB1HL5"):
+        if query and "?" in cleaned_query and user and team:
             query_id = str(uuid.uuid4())
             response = requests.post(
                 f"{os.environ['API_URL']}/search",
