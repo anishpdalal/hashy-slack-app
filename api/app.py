@@ -24,7 +24,6 @@ index = pinecone.Index(index_name="semantic-text-search")
 
 
 def _search_slack(team, query, embedding):
-    threshold = 0 if team == "T015E1A6N6L" or team == "T02KCNMCUHE" or team == "T02MGVB1HL5" else 1
     filter = {
         "team_id": {"$eq": team},
         "text_type": {"$eq": "content"},
@@ -48,7 +47,7 @@ def _search_slack(team, query, embedding):
     reranked_matches = [x for x in sorted(matches, key=lambda x: x["reranked_score"], reverse=True)]
     for match in reranked_matches:
         metadata = match["metadata"]
-        if match["reranked_score"] >= threshold:            
+        if match["reranked_score"] >= 1:            
             results.append({
                 "id": match["id"],
                 "name": metadata["source_name"],
@@ -71,7 +70,6 @@ def _convert_date_to_str(d):
 
 
 def _search_documents(team, query, embedding, text_type="content"):
-    threshold = 0 if team == "T015E1A6N6L" or team == "T02KCNMCUHE" or team == "T02MGVB1HL5" else 0.65
     filter = {
         "team_id": {"$eq": team},
         "text_type": {"$eq": text_type},
@@ -95,7 +93,7 @@ def _search_documents(team, query, embedding, text_type="content"):
     reranked_matches = [x for x in sorted(matches, key=lambda x: x["reranked_score"], reverse=True)]
     for match in reranked_matches:
         metadata = match["metadata"]
-        if match["reranked_score"] >= threshold:
+        if match["reranked_score"] >= 1:
            results.append({
                 "id": match["id"],
                 "name": _convert_date_to_str(metadata["source_name"]),
