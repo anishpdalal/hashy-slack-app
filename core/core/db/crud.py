@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import os
 from typing import List
 
@@ -87,6 +88,38 @@ def update_content_store(source_id: str, fields: dict):
             db.query(ContentStore).filter(
                 ContentStore.source_id == source_id
             ).update(fields)
+        except:
+            db.rollback()
+            raise
+        else:
+            db.commit()
+
+
+def get_older_content_stores_from_integration(integration, days=180):
+    if integration.type == "slack":
+        content_store_type = "slack_message"
+    elif integration.type == "gdrive":
+        content_store_type = "drive#file|application/vnd.google-apps.document"
+    elif integration.type == "notion":
+        content_store_type = "notion"
+    else:
+        return
+    with Session() as db:
+        content = db.query(ContentStore).filter(
+            ContentStore.team_id == integration.team_id,
+            ContentStore.type == content_store_type,
+            ContentStore.source_last_updated < datetime.today() - timedelta(days=days),
+            ContentStore.is_boosted == False
+        ).all()
+        return content
+
+
+def delete_content_stores(source_ids: List[str]):
+    with Session() as db:
+        try:
+            db.query(ContentStore).filter(
+                ContentStore.source_id.in_(source_ids)
+            ).delete()
         except:
             db.rollback()
             raise

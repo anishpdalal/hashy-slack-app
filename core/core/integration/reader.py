@@ -49,8 +49,12 @@ def _get_notion_pages(integration):
         "content_stores": []
     }
     for page in notion_pages.get("results", []):
+        last_edited_time = page["last_edited_time"]
         if page["archived"]:
             continue
+        if (datetime.datetime.now() - datetime.datetime.strptime(last_edited_time, "%Y-%m-%dT%H:%M:%S.%fZ")).days > 180:
+            result["cursor"] = None
+            break
         url = page["url"]
         split_url = url.split("/")[-1].split("-")
         if len(split_url) == 1:
@@ -64,9 +68,38 @@ def _get_notion_pages(integration):
             "type": "notion",
             "name": file_name,
             "source_id": page["id"],
-            "source_last_updated": page["last_edited_time"]
+            "source_last_updated": last_edited_time
         })
     return result
+
+
+def get_notion_page(integration, source_id):
+    headers = {
+        "Authorization": f"Bearer {integration.token}",
+        "Content-type": "application/json",
+        "Notion-Version": "2021-08-16"
+    }
+    api_url = f"https://api.notion.com/v1/pages/{source_id}"
+    response = requests.get(api_url, headers=headers).json()
+    if response.status_code != 200:
+        return {"error": "Page not found"}
+    json_response = response.json()
+    url = json_response["url"]
+    split_url = url.split("/")[-1].split("-")
+    if len(split_url) == 1:
+        file_name = "Untitled"
+    else:
+        file_name = " ".join(split_url[:-1])
+
+    return {
+        "team_id": integration.team_id,
+        "user_id": integration.user_id,
+        "url": json_response["url"],
+        "type": "notion",
+        "name": file_name,
+        "source_id": json_response["id"],
+        "source_last_updated": json_response["last_edited_time"]
+    }
 
 
 def _get_gdrive_service(token):
@@ -108,6 +141,10 @@ def _get_gdrive_docs(integration):
     }
     for file in files.get("files", []):
         source_id = file["id"]
+        source_last_updated = file["modifiedTime"]
+        if (datetime.datetime.now() - datetime.datetime.strptime(source_last_updated, "%Y-%m-%dT%H:%M:%S.%fZ")).days > 180:
+            result["cursor"] = None
+            break
         result["content_stores"].append({
             "team_id": integration.team_id,
             "user_id": integration.user_id,
@@ -115,9 +152,30 @@ def _get_gdrive_docs(integration):
             "type": f"drive#file|{file['mimeType']}",
             "name": file["name"],
             "source_id": source_id,
-            "source_last_updated": file["modifiedTime"]
+            "source_last_updated": source_last_updated
         })
     return result
+
+
+def get_gdrive_doc(integration, source_id):
+    service = _get_gdrive_service(integration.token)
+    try:
+        file = service.files().get(
+            fileId=source_id,
+            supportsAllDrives=True,
+            fields="id, name, modifiedTime, mimeType",
+        ).execute()
+    except:
+        return {"error": "File not found"}
+    return {
+        "team_id": integration.team_id,
+        "user_id": integration.user_id,
+        "url": f"https://drive.google.com/file/d/{source_id}",
+        "type": f"drive#file|{file['mimeType']}",
+        "name": file["name"],
+        "source_id": source_id,
+        "source_last_updated": file["modifiedTime"]
+    }
 
 
 def _get_slack_channels(integration):
@@ -351,6 +409,9 @@ def _should_index_slack_message(message):
     type = message.get("type")
     if not text or not user or type != "message":
         return False
+    last_updated = datetime.datetime.fromtimestamp(float(message["ts"]))
+    if (datetime.datetime.now() - last_updated).days > 180:
+        return False
     return True
     
 
@@ -363,11 +424,6 @@ def _get_slack_channel_messages(integration, content_store):
         messages = []
         conversations = client.conversations_history(channel=channel_id, limit=1000)
         messages.extend(conversations.get("messages", []))
-        next_cursor = conversations.get("response_metadata", {}).get("next_cursor")
-        while next_cursor:
-            conversations = client.conversations_history(channel=channel_id, limit=1000, cursor=next_cursor)
-            messages.extend(conversations.get("messages", []))
-            next_cursor = conversations.get("response_metadata", {}).get("next_cursor")
     elif last_updated:
         oldest = datetime.datetime.strptime(last_updated, "%Y-%m-%dT%H:%M:%S.%fZ").timestamp()
         messages = client.conversations_history(

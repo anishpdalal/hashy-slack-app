@@ -23,6 +23,8 @@ from slack_sdk.web import WebClient
 from slack_sdk.errors import SlackApiError
 
 from core.db import crud
+from core.integration import reader
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -721,6 +723,13 @@ def help_command(ack, respond, command, client):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
+                        "text": f"To delete a document, enter `/hashy delete <document url>`"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
                         "text": f"<https://calendly.com/taherhassonjee/hashy-onboarding|Schedule an Onboarding Call>"
                     }
                 },
@@ -824,28 +833,59 @@ def help_command(ack, respond, command, client):
     elif command_text.startswith("share"):
         content_store_url = command_text.split(" ")[1]
         parsed_url = urlparse(content_store_url)
-
         if "notion.so" in parsed_url.netloc:
             source_id = str(uuid.UUID(parsed_url.path.split("/")[-1].split("-")[-1]))
+            integration = crud.get_user_integration(team, user, "notion")
+            if integration is None:
+                client.chat_postMessage(channel=user, text=f"Could not add document as key doc. You need to setup a notion integration first.")
+                return
+            file = reader.get_notion_page(integration, source_id)
         elif "google.com" in parsed_url.netloc:
             path = parsed_url.path
             split_path = path.split("/")
             idx = split_path.index("d") + 1
             source_id = split_path[idx]
+            integration = crud.get_user_integration(team, user, "gdrive")
+            if integration is None:
+                client.chat_postMessage(channel=user, text=f"Could not add document as key doc. You need to setup a GDrive integration first.")
+                return
+            file = reader.get_gdrive_doc(integration, source_id)
         else:
-            client.chat_postMessage(channel=user, text=f"Could not process document: {content_store_url}.")
+            client.chat_postMessage(channel=user, text=f"Could not process document")
             return
-        content_store = crud.get_content_store(source_id)
-        if not content_store:
-            client.chat_postMessage(channel=user, text=f"Could not find document: {content_store_url}. It needs to be shared with your integration.")
+        if "error" in file:
+            client.chat_postMessage(channel=user, text=f"Could not process document")
             return
-        users = content_store.user_ids
-        if user not in users:
-            client.chat_postMessage(channel=user, text=f"Could not add document as key doc. It needs to be shared with your integration.")
-            return
-        crud.update_content_store(source_id, {"is_boosted": True})
+        file["is_boosted"] = True
+        file["integration_id"] = integration.id
+        queue.send_message(MessageBody=json.dumps(file))
         client.chat_postMessage(channel=user, text=f"Added key doc")
-
+    elif command_text.startswith("delete"):
+        content_store_url = command_text.split(" ")[1]
+        parsed_url = urlparse(content_store_url)
+        if "notion.so" in parsed_url.netloc:
+            source_id = str(uuid.UUID(parsed_url.path.split("/")[-1].split("-")[-1]))
+            integration = crud.get_user_integration(team, user, "notion")
+        elif "google.com" in parsed_url.netloc:
+            path = parsed_url.path
+            split_path = path.split("/")
+            idx = split_path.index("d") + 1
+            source_id = split_path[idx]
+            integration = crud.get_user_integration(team, user, "gdrive")
+        else:
+            client.chat_postMessage(channel=user, text=f"Could not delete document")
+            return
+        if integration is None:
+            client.chat_postMessage(channel=user, text=f"Could not delete document")
+            return
+        queue.send_message(MessageBody=json.dumps(
+            {
+                "event_type": "DELETE",
+                "source_id": source_id,
+                "integration_id": integration.id
+            }
+        ))
+        client.chat_postMessage(channel=user, text=f"Deleted document")
     else:
         event = {
             "team": team,

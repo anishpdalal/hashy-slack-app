@@ -36,10 +36,37 @@ def handler(event, context):
 
     for record in event['Records']:
         if isinstance(record["body"], str):
-            content_store = json.loads(record["body"])
+            record_body = json.loads(record["body"])
         else:
-            content_store = record["body"]
+            record_body = record["body"]
+        if record_body.get("event_type") == "BULK_DELETE":
+            integration = crud.get_integration(record_body["integration_id"])
+            content_stores = crud.get_older_content_stores_from_integration(integration)
+            source_ids = [content_store.source_id for content_store in content_stores]
+            if integration.type == "slack":
+                vector_source_ids = source_ids
+            else:
+                vector_source_ids = []
+                for content_store in content_stores:
+                    vector_source_ids.append(f"{integration.team_id}-{content_store.source_id}")
+                    vector_source_ids.extend([f"{integration.team_id}-{content_store.source_id}-{idx}" for idx in range(content_store.num_vectors)])
+            for chunk in chunks(vector_source_ids, batch_size=100):
+                index.delete(ids=list(chunk))
+            crud.delete_content_stores(source_ids)
+            continue
+        elif record_body.get("event_type") == "DELETE":
+            integration = crud.get_integration(record_body["integration_id"])
+            source_id = record_body["source_id"]
+            content_store = crud.get_content_store(source_id)
+            vector_source_ids = []
+            vector_source_ids.append(f"{content_store.team_id}-{source_id}")
+            vector_source_ids.extend([f"{integration.team_id}-{source_id}-{idx}" for idx in range(content_store.num_vectors)])
+            for chunk in chunks(vector_source_ids, batch_size=100):
+                index.delete(ids=list(chunk))
+            crud.delete_content_stores([source_id])
+            continue
         logger.info(record['body'])
+        content_store = record_body
         user_id = content_store["user_id"]
         team_id = content_store["team_id"]
         source_id = content_store["source_id"]
@@ -83,7 +110,8 @@ def handler(event, context):
                 "source_id": source_id,
                 "user_ids": [user_id] if user_id else None,
                 "source_last_updated": source_last_updated,
-                "num_vectors": len(text)
+                "num_vectors": len(text),
+                "is_boosted": content_store.get("is_boosted", False),
             }
             crud.create_content_store(content)
         else:
@@ -96,6 +124,8 @@ def handler(event, context):
                 user_ids = set(content_store_db.user_ids)
                 user_ids.add(user_id)
                 content["user_ids"] = list(user_ids)
+            if content_store.get("is_boosted"):
+                content["is_boosted"] = True
             crud.update_content_store(source_id, content)
         content_store_db = crud.get_content_store(source_id)
         if content_store_type == "answer":
