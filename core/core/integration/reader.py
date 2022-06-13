@@ -489,11 +489,14 @@ def extract_data_from_content_store(integration, content_store):
     })
     if not text:
         return split_text
-    chunks = re.split(REGEX_EXP, text)
-    for idx, chunk in enumerate(chunks):
+    chunks = [chunk for chunk in re.split(REGEX_EXP, text) if any(c.isalpha() for c in chunk)]
+    chunk_size = 4
+    for idx, i in enumerate(range(0, len(chunks), chunk_size)):
+        chunk = chunks[i:i+chunk_size]
+        chunk_str = " ".join(chunk).strip().replace("\n", " ")
         split_text.append({
             "id": f"{team_id}-{content_store['source_id']}-{idx}",
-            "text": chunk,
+            "text": chunk_str,
             "user_id": user_id,
             "team_id": content_store["team_id"],
             "text_type": f"content",
