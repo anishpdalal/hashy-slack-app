@@ -139,59 +139,41 @@ def handle_message_channel(event, say, client):
                         "team_id": team,
                         "query": query,
                         "user_id": user,
-                        "count": 10,
                         "event_type": "CHANNEL_SEARCH"
                     }
                 )
             ).json()
             modified_query = response.get("modified_query")
-            slack_message_results = response.get("slack_messages_results", [])
-            content_results = response.get("content_results", [])
-            source_ids = [result["source_id"] for result in content_results]
+            summarized_result = response.get("summarized_result")
+            results = response.get("results", [])
+            source_ids = [result["source_id"] for result in results]
             content_stores = crud.get_content_stores(source_ids) or []
             content_store_user_mapping = {content_store.source_id: content_store.is_boosted for content_store in content_stores}
-            filtered_content_results = [result for result in content_results if content_store_user_mapping.get(result["source_id"])]
-            results = filtered_content_results + slack_message_results
-            if len(results) > 0:
+            filtered_content_results = [result for result in results if content_store_user_mapping.get(result["source_id"])]
+            results = filtered_content_results
+            if len(results) > 0 and "I don't know" not in summarized_result:
                 blocks = []
                 top_result = results[0]
-                if top_result["source_type"] == "slack_message":
-                    channel_link = f"<{top_result['url']}|{top_result['name']}>"
-                    blocks.append(
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"Found a related slack conversation in {channel_link} for {modified_query}"
-                            }
+                source_name = top_result["name"]
+                source_url = top_result["url"]
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": summarized_result
                         }
-                    )
-                elif top_result["source_type"] == "answer":
-                    source_name = top_result["name"]
-                    question = top_result["text"]
-                    answer = top_result["answer"]
-                    blocks.append(
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"Found a related answer from {source_name} \n\n_Answer_: {answer}\n\n_Topic_: {question}"
-                            }
+                    }
+                )
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"Source: <{source_url}|{source_name}> \n\n"
                         }
-                    )
-                else:
-                    source_name = top_result["name"]
-                    source_url = top_result["url"]
-                    source_text = top_result["text"]
-                    blocks.append(
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"Found related content from <{source_url}|{source_name}> \n\n{source_text}"
-                            }
-                        }
-                    )
+                    }
+                )
                 blocks.extend([
                     {
                         "type": "actions",
@@ -355,46 +337,6 @@ def handle_view_more_click(ack, body, client):
     )
 
 
-@app.view("submit_answer_view")
-def handle_submit_answer_view(ack, body, client, view):
-    ack()
-    user = body["user"]["id"]
-    user_name = body["user"]["name"]
-    team = body["team"]["id"]
-    text = [block["text"]["text"].split("Query: ")[1] for block in body["view"]["blocks"] if "Query:" in block.get("text", {}).get("text", "")][0]
-    answer = view["state"]["values"]["save_answer"]["save_answer"]["value"]
-    selected_conversations = view["state"]["values"]["ask_teammate"]["ask_teammate"]["selected_conversations"]
-    if answer:
-        message = {
-            "team_id": team,
-            "user_id": user,
-            "type": "answer",
-            "source_id": str(uuid.uuid4()),
-            "source_name": user_name,
-            "source_last_updated": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-            "text": text,
-            "answer": answer
-        }
-        queue.send_message(MessageBody=json.dumps(message))
-        client.chat_postMessage(
-            channel=user,
-            text=f"Successfully saved answer to {text}"
-        )
-    for id in selected_conversations:
-        slack_user = crud.get_slack_user(team, user)
-        if slack_user:
-            msg = f"{user_name} has requested your help. Please enter `/hashy {text}` and provide an answer to the question. Thanks!"
-        else:
-            msg = f"{user_name} has requested your help. Please install the Hashy Slack app and enter `/hashy {text}` to provide an answer to the question. Thanks!"
-        try:
-            client.chat_postMessage(channel=id, text=msg)
-        except SlackApiError as e:
-            if e.response["error"] == "not_in_channel":
-                channel_name = client.conversations_info(channel=id)["channel"]["name"]
-                msg = f"The channel {channel_name} couldn't receive your question. Invite Hashy to the channel and ask again!"
-                client.chat_postMessage(channel=user, text=msg)
-
-
 def answer_query(event, query, type=None):
     team = event["team"]
     user = event["user"]
@@ -411,24 +353,18 @@ def answer_query(event, query, type=None):
             }
         )
     ).json()
-    slack_messages_results = response.get("slack_messages_results", [])
-    content_results = response.get("content_results", [])
-    title_results = response.get("title_results", [])
-    summarized_result = response.get("summarized_result")
-    all_results = slack_messages_results + content_results
-    source_ids = [result["source_id"] for result in content_results + title_results]
+    results = response.get("results", [])
+    source_ids = [result["source_id"] for result in results]
     content_stores = crud.get_content_stores(source_ids) or []
     content_store_user_mapping = {content_store.source_id: {"users": content_store.user_ids, "boosted": content_store.is_boosted} for content_store in content_stores}
-    if all_results:
-        top_result = max(slack_messages_results + content_results, key=lambda x: x["semantic_score"])
+    if results:
+        top_result = results[0]
         top_score = int(top_result["semantic_score"] * 100)  
         days_old = (datetime.datetime.now() - datetime.datetime.strptime(top_result["last_updated"], "%m/%d/%Y")).days
         freshness_score = top_score + 10 if days_old <= 100 else top_score
         freshness_score = min(freshness_score, 95)
     else:
         freshness_score = 0
-    gdrive_integration = crud.get_user_integration(team, user, "gdrive")
-    notion_integration = crud.get_user_integration(team, user, "notion")
     blocks = []
     blocks.append({
         "type": "header",
@@ -438,6 +374,7 @@ def answer_query(event, query, type=None):
             "emoji": True
         }
     })
+    summarized_result = response.get("summarized_result")
     if summarized_result and "I don't know" not in summarized_result:
         blocks.append({
             "type": "header",
@@ -459,92 +396,45 @@ def answer_query(event, query, type=None):
         )
         blocks.append({"type": "divider"})
 
-    if slack_messages_results:
-        blocks.append({
-			"type": "header",
-			"text": {
-				"type": "plain_text",
-				"text": f"Team Answers",
-				"emoji": True
-			}
-		})
-    
-    for idx, result in enumerate(slack_messages_results):
-        if idx != 0:
-            blocks.append({"type": "divider"})
-        if result["source_type"] == "slack_message":
-            question = result["text"]
-            source = f"<{result['url']}|{result['name']}>"
-            last_updated = result["last_updated"]
-            blocks.append(
-                {
-                    "block_id": result["id"],
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"\n\n_Responding to_: {question}\n\n _Source_: {source} on {last_updated}\n\n"
-                    }
-                }
-            )
-        elif result["source_type"] == "answer":
-            question = result["text"]
-            answer = result["answer"]
-            last_updated = result["last_updated"]
-            source = result["name"]
-            blocks.append(
-                {
-                    "block_id": result["id"],
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"\n\n_Responding to_: {question}\n\n _Answer_: {answer}\n\n _Source_: {source} on {last_updated}"
-                    }
-                }
-            )
-        else:
-            pass
-
-    boosted_content_results = [result for result in content_results if content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
-    non_boosted_content_results = [result for result in content_results if not content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
+    boosted_content_results = [result for result in results if content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
+    non_boosted_content_results = [result for result in results if not content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
     content_results = boosted_content_results + non_boosted_content_results
     if content_results:
         blocks.append({
 			"type": "header",
 			"text": {
 				"type": "plain_text",
-				"text": f"Document Snippets",
+				"text": f"Results",
 				"emoji": True
 			}
 		})
-        if not gdrive_integration and not notion_integration:
-            blocks.append(
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"Set up an integration to view results from documents with the `/hashy integrate` command"
-                    }
-                }
-            )
     for idx, result in enumerate(content_results):
         content_source_id = result["source_id"]
-        if user not in content_store_user_mapping.get(content_source_id, {}).get("users", []) \
-                and not content_store_user_mapping.get(content_source_id, {}).get("boosted", False):
+        source_type = result["source_type"]
+        content_store = content_store_user_mapping.get(content_source_id, {})
+        user_ids = content_store.get("users", []) or []
+        is_boosted = content_store.get("boosted", False)
+        if source_type != "slack_message" and source_type != "answer" and user not in user_ids and not is_boosted:
             continue
         if idx != 0:
             blocks.append({"type": "divider"})
-        name = result["name"]
-        url = result["url"]
-        text = result["text"]
+        name = result.get("name")
+        url = result.get("url")
+        source_type = result["source_type"]
+        if source_type == "answer":
+            text = f"Topic: {result.get('text')}\nAnswer: {result.get('answer')}"
+        else:
+            text = result.get("text")
         last_updated = result["last_updated"]
         source_type = result["source_type"]
         if source_type.startswith("notion"):
             source_type = "(Notion)"
         elif source_type.startswith("drive"):
             source_type = "(Google Drive)"
+        elif source_type.startswith("slack"):
+            source_type = "(Slack Message)"
         else:
             source_type = ""
-        source = "Notion" if source_type.startswith("notion") else "Google Drive"
         source_text = f"<{url}|{name}> {source_type} on {last_updated}"
         blocks.append(
             {
@@ -932,47 +822,10 @@ def help_command(ack, respond, command, client):
         ]
         result_blocks = answer_query(event, command_text, type="COMMAND_SEARCH")
         blocks.extend(result_blocks)
-        blocks.extend([
-            {
-                "block_id": "save_answer",
-                "type": "input",
-                "optional": True,
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "save_answer",
-                    "multiline": True,
-                },
-                "label": {
-                    "type": "plain_text",
-                    "text": f"Have an answer you'd like to contribute? Save it here:",
-                    "emoji": True
-                }
-            },
-            {
-                "block_id": "ask_teammate",
-                "type": "input",
-                "optional": True,
-                "element": {
-                    "type": "multi_conversations_select",
-                    "placeholder": {
-                        "type": "plain_text",
-                        "text": "Select teammates and/or channels",
-                        "emoji": True
-                    },
-                    "action_id": "ask_teammate",
-                },
-                "label": {
-                    "type": "plain_text",
-                    "text": "Think somebody else can provide a great answer? Ask teammates to contribute.",
-                    "emoji": True
-                }
-            }
-        ])
         client.views_update(
             hash=response["view"]["hash"],
             view_id=response["view"]["id"],
             view={
-                "callback_id": "submit_answer_view",
                 "type": "modal",
                 "title": {
                     "type": "plain_text",
@@ -980,12 +833,6 @@ def help_command(ack, respond, command, client):
                     "emoji": True
                 },
                 "blocks": blocks,
-                "private_metadata": channel,
-                "submit": {
-                    "type": "plain_text",
-                    "text": "Submit",
-                    "emoji": True
-                },
                 "close": {
                     "type": "plain_text",
                     "text": "Close",
