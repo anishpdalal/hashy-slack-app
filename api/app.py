@@ -40,34 +40,20 @@ def _search_documents(team, embedding, k=10):
     matches = query_results["results"][0]["matches"]
     for match in matches:
         metadata = match["metadata"]
-        results.append({
-            "id": match["id"],
-            "name": _convert_date_to_str(metadata["source_name"]),
-            "url": metadata.get("url"),
-            "text": metadata.get("text"),
-            "text_type": metadata.get("text_type"),
-            "last_updated": metadata["last_updated"].strftime("%m/%d/%Y"),
-            "semantic_score": match["score"],
-            "source_type": metadata.get("source_type"),
-            "answer": metadata.get("answer"),
-            "source_id": metadata["source_id"],
-        }) 
+        if match["score"] >= 0.3:
+            results.append({
+                "id": match["id"],
+                "name": _convert_date_to_str(metadata["source_name"]),
+                "url": metadata.get("url"),
+                "text": metadata.get("text"),
+                "text_type": metadata.get("text_type"),
+                "last_updated": metadata["last_updated"].strftime("%m/%d/%Y"),
+                "semantic_score": match["score"],
+                "source_type": metadata.get("source_type"),
+                "answer": metadata.get("answer"),
+                "source_id": metadata["source_id"],
+            }) 
     return results
-
-
-def _get_answer_from_doc(text, query):
-    prompt = "Answer the question based on the context below, and if the question can't be answered based on the context, say \"I don't know\"\n\nContext:\n{0}\n\n---\n\nQuestion: {1}\nAnswer:"
-    response = openai.Completion.create(
-        engine="text-davinci-002",
-        prompt=prompt.format(text, query),
-        temperature=0,
-        max_tokens=100,
-        top_p=1,
-        frequency_penalty=0,
-        presence_penalty=0
-    )
-    answer = response.choices[0]["text"].strip()
-    return answer
 
 
 def handler(event, context):
@@ -92,7 +78,6 @@ def handler(event, context):
         results["body"]["modified_query"] = None
         results["body"]["query_id"] = body.get("query_id")
         results["body"]["results"] = None
-        results["body"]["summarized_result"] = None
         if event_type == "CHANNEL_SEARCH":
             pred = pipe(query, truncation=True, max_length=512)[0]
             label = pred["label"]
@@ -122,18 +107,14 @@ def handler(event, context):
         query_embedding = search_model.encode([query])
         search_documents = _search_documents(team, query_embedding, k=20)
         results["body"]["results"] = search_documents
-        if search_documents and any([d["text_type"] == "content" for d in search_documents]):
-            top_result_text = [d for d in search_documents if d["text_type"] == "content" and d["source_type"] != "slack_message" and d["source_type"] != "answer"][0]["text"]
-            results["body"]["summarized_result"] = _get_answer_from_doc(top_result_text, query)
         logger.info({
             "team_id": team,
             "user_id": body["user_id"],
             "query": query,
             "query_id": body.get("query_id"),
             "event_type": "PREDICTION",
-            "num_content_results": len(search_documents),
-            "num_results": len(search_documents),
-            "top_score": search_documents[0]["semantic_score"] if search_documents else None
+            "top_result_score": search_documents[0]["semantic_score"] if search_documents else None,
+            "top_result_id": search_documents[0]["id"] if search_documents else None
         })
         results["body"]["results"] = search_documents
         results["body"] = json.dumps(results["body"])
