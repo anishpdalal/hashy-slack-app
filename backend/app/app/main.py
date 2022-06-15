@@ -13,6 +13,7 @@ import boto3
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from google_auth_oauthlib.flow import Flow
+import openai
 from pydantic import BaseModel
 import requests
 from slack_bolt import App
@@ -71,6 +72,31 @@ def handle_file_created_events(client, event, say):
 @app.event({"type": "message", "subtype": "message_deleted"})
 def handle_message_deleted(event, say):
     pass
+
+
+def _get_answer_from_doc(text, query):
+    prompt = "Answer the question based on the context below, and if the question can't be answered based on the context, say \"I don't know\"\n\nContext:\n{0}\n\n---\n\nQuestion: {1}\nAnswer:"
+    response = openai.Completion.create(
+        engine="text-davinci-002",
+        prompt=prompt.format(text, query),
+        temperature=0,
+        max_tokens=100,
+        top_p=1,
+        frequency_penalty=0,
+        presence_penalty=0
+    )
+    answer = response.choices[0]["text"].strip()
+    return answer
+
+
+def _get_adjancent_slack_text(client, result):
+    message_id = result["id"].split("-")[1]
+    replies = client.conversations_replies(channel=result["source_id"], ts=message_id).get("messages", [])
+    if len(replies) > 1:
+        return " ".join([r["text"] for r in replies if r.get("text") and r.get("user", "").startswith("U")])
+    else:
+        messages = client.conversations_history(channel=result["source_id"], oldest=message_id, inclusive=True, limit=3).get("messages", [])
+        return " ".join([m["text"] for m in messages if m.get("text")])
 
 
 @app.event("member_joined_channel")
@@ -144,14 +170,23 @@ def handle_message_channel(event, say, client):
                 )
             ).json()
             modified_query = response.get("modified_query")
-            summarized_result = response.get("summarized_result")
             results = response.get("results", [])
             source_ids = [result["source_id"] for result in results]
             content_stores = crud.get_content_stores(source_ids) or []
             content_store_user_mapping = {content_store.source_id: content_store.is_boosted for content_store in content_stores}
-            filtered_content_results = [result for result in results if content_store_user_mapping.get(result["source_id"])]
-            results = filtered_content_results
-            if len(results) > 0 and "I don't know" not in summarized_result:
+            boosted_content_results = [result for result in results if content_store_user_mapping.get(result["source_id"])]
+            slack_message_results = [result for result in results if result["source_type"] in ["slack_message", "answer"]]
+            content_results = boosted_content_results + slack_message_results
+            summarized_result = None
+            if content_results:
+                top_result = content_results[0]
+                top_result_type = top_result["source_type"]
+                if top_result_type == "slack_message":
+                    top_result_text = _get_adjancent_slack_text(client, top_result)
+                else:
+                    top_result_text = top_result["text"] or top_result["answer"]
+                summarized_result = _get_answer_from_doc(top_result_text, modified_query)
+            if summarized_result and "I don't know" not in summarized_result:
                 blocks = []
                 top_result = results[0]
                 source_name = top_result["name"]
@@ -224,6 +259,18 @@ def handle_message_channel(event, say, client):
                     }
                 ])
                 client.chat_postMessage(channel=channel, thread_ts=ts, blocks=blocks)
+                requests.post(
+                    f"{os.environ['API_URL']}/ping",
+                    data=json.dumps(
+                        {
+                            "query_id": query_id,
+                            "team_id": team,
+                            "user_id": user,
+                            "event_type": "AUTO_REPLY",
+                            "summarized_text": summarized_result
+                        }
+                    )
+                )
 
 
 @app.action("upvote")
@@ -313,9 +360,9 @@ def handle_view_more_click(ack, body, client):
             }
         }
     ]
-    result_blocks = answer_query(event, query, type="AUTO_REPLY_CLICK")
+    result_blocks, top_result = answer_query(event, query, type="AUTO_REPLY_CLICK")
     blocks.extend(result_blocks)
-    client.views_update(
+    updated_response = client.views_update(
         hash=response["view"]["hash"],
         view_id=response["view"]["id"],
         view={
@@ -335,6 +382,27 @@ def handle_view_more_click(ack, body, client):
             "clear_on_close": True
         }
     )
+    if top_result:
+        blocks = _summarize_top_result(top_result, blocks, client, query)
+        client.views_update(
+            hash=updated_response["view"]["hash"],
+            view_id=updated_response["view"]["id"],
+            view={
+                "type": "modal",
+                "title": {
+                    "type": "plain_text",
+                    "text": "Results",
+                    "emoji": True
+                },
+                "blocks": blocks,
+                "close": {
+                    "type": "plain_text",
+                    "text": "Close",
+                    "emoji": True
+                },
+                "clear_on_close": True
+            }
+        )
 
 
 def answer_query(event, query, type=None):
@@ -357,48 +425,35 @@ def answer_query(event, query, type=None):
     source_ids = [result["source_id"] for result in results]
     content_stores = crud.get_content_stores(source_ids) or []
     content_store_user_mapping = {content_store.source_id: {"users": content_store.user_ids, "boosted": content_store.is_boosted} for content_store in content_stores}
-    if results:
-        top_result = results[0]
+    blocks = []
+    boosted_content_results = [result for result in results if content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
+    non_boosted_content_results = [result for result in results if not content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
+    content_results = boosted_content_results + non_boosted_content_results
+    if content_results:
+        top_result = content_results[0]
         top_score = int(top_result["semantic_score"] * 100)  
         days_old = (datetime.datetime.now() - datetime.datetime.strptime(top_result["last_updated"], "%m/%d/%Y")).days
         freshness_score = top_score + 10 if days_old <= 100 else top_score
         freshness_score = min(freshness_score, 95)
-    else:
-        freshness_score = 0
-    blocks = []
-    blocks.append({
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": f"Knowledge Freshness Score: {freshness_score}",
-            "emoji": True
-        }
-    })
-    summarized_result = response.get("summarized_result")
-    if summarized_result and "I don't know" not in summarized_result:
         blocks.append({
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"Summarized Answer",
+                "text": f"Knowledge Freshness Score: {freshness_score}",
                 "emoji": True
             }
         })
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "plain_text",
-                    "text": summarized_result,
-                    "emoji": True
-                }
+    else:
+        top_result = None
+        blocks.append({
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"No Results Found",
+                "emoji": True
             }
-        )
-        blocks.append({"type": "divider"})
+        })
 
-    boosted_content_results = [result for result in results if content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
-    non_boosted_content_results = [result for result in results if not content_store_user_mapping.get(result["source_id"], {}).get("boosted", False)]
-    content_results = boosted_content_results + non_boosted_content_results
     if content_results:
         blocks.append({
 			"type": "header",
@@ -456,7 +511,7 @@ def answer_query(event, query, type=None):
             }
         )
     
-    return blocks
+    return blocks, top_result
 
 
 @app.event("app_mention")
@@ -727,9 +782,10 @@ def help_command(ack, respond, command, client):
             source_id = str(uuid.UUID(parsed_url.path.split("/")[-1].split("-")[-1]))
             integration = crud.get_user_integration(team, user, "notion")
             if integration is None:
-                client.chat_postMessage(channel=user, text=f"Could not add document as key doc. You need to setup a notion integration first.")
+                client.chat_postMessage(channel=user, text=f"Could not add document as key doc. You need to setup a Notion integration first.")
                 return
             file = reader.get_notion_page(integration, source_id)
+            error_msg = f"Could not share Notion document since the integration does not have access to the doc. Navigate to the <{content_store_url}|Notion document>, share it with the Hashy Integration, and retry the command."
         elif "google.com" in parsed_url.netloc:
             path = parsed_url.path
             split_path = path.split("/")
@@ -737,14 +793,18 @@ def help_command(ack, respond, command, client):
             source_id = split_path[idx]
             integration = crud.get_user_integration(team, user, "gdrive")
             if integration is None:
-                client.chat_postMessage(channel=user, text=f"Could not add document as key doc. You need to setup a GDrive integration first.")
+                client.chat_postMessage(channel=user, text=f"Could not add document as key doc. You need to setup a Google Drive integration first.")
                 return
             file = reader.get_gdrive_doc(integration, source_id)
+            google_redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
+            google_client_id = os.environ["GOOGLE_CLIENT_ID"]
+            gdrive_url = f"https://accounts.google.com/o/oauth2/v2/auth?scope=https://www.googleapis.com/auth/drive.file&access_type=offline&include_granted_scopes=true&response_type=code&state={user}-{team}&redirect_uri={google_redirect_uri}&client_id={google_client_id}"
+            error_msg = f"Could not share Google Drive document since the integration does not have access to the document. Go to <{gdrive_url}|Google Drive Filer Picker> and select the documents to give access to integration, and retry the command."
         else:
             client.chat_postMessage(channel=user, text=f"Could not process document")
             return
         if "error" in file:
-            client.chat_postMessage(channel=user, text=f"Could not process document")
+            client.chat_postMessage(channel=user, text=error_msg)
             return
         file["is_boosted"] = True
         file["integration_id"] = integration.id
@@ -820,9 +880,9 @@ def help_command(ack, respond, command, client):
                 }
             }
         ]
-        result_blocks = answer_query(event, command_text, type="COMMAND_SEARCH")
+        result_blocks, top_result = answer_query(event, command_text, type="COMMAND_SEARCH")
         blocks.extend(result_blocks)
-        client.views_update(
+        updated_response = client.views_update(
             hash=response["view"]["hash"],
             view_id=response["view"]["id"],
             view={
@@ -841,6 +901,56 @@ def help_command(ack, respond, command, client):
                 "clear_on_close": True
             }
         )
+        if top_result:
+            blocks = _summarize_top_result(top_result, blocks, client, command_text)
+            client.views_update(
+                hash=updated_response["view"]["hash"],
+                view_id=updated_response["view"]["id"],
+                view={
+                    "type": "modal",
+                    "title": {
+                        "type": "plain_text",
+                        "text": "Results",
+                        "emoji": True
+                    },
+                    "blocks": blocks,
+                    "close": {
+                        "type": "plain_text",
+                        "text": "Close",
+                        "emoji": True
+                    },
+                    "clear_on_close": True
+                }
+            )
+        
+
+def _summarize_top_result(top_result, blocks, client, query):
+    summarized_result = None
+    top_result_type = top_result["source_type"]
+    if top_result_type == "slack_message":
+        top_result_text = _get_adjancent_slack_text(client, top_result)
+    else:
+        top_result_text = top_result["text"] or top_result["answer"]
+    summarized_result = _get_answer_from_doc(top_result_text, query)
+    if summarized_result and "I don't know" not in summarized_result:
+        blocks.insert(2, {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"Summarized Answer",
+                "emoji": True
+            }
+        })
+        blocks.insert(3, {
+            "type": "section",
+            "text": {
+                "type": "plain_text",
+                "text": summarized_result,
+                "emoji": True
+            }
+        },)
+        blocks.insert(4, {"type": "divider"})
+    return blocks
 
 
 @app.event("app_home_opened")
@@ -868,7 +978,15 @@ def handle_app_home_opened(client, event, say):
             "team_name": team_name,
             "team_id": team_id
         })
-        say(f":wave: Hi <@{result['user']['name']}>, Welcome to the Hashy app on Slack! Hashy lets you quickly find and share knowledge across your org.\n")
+        say(text= f":wave: Hi <@{result['user']['name']}>, Welcome to the Hashy! Hashy improves knowledge access across your team.\n\n"
+            "Please see the following onboarding steps to set up Hashy.\n\n"
+            "1. Invite Hashy via @Hashy to your team's public Slack channel. This will make knowledge-filled slack messages searchable and allow Hashy to automatically answer questions in the channel.\n\n"
+            "2. Setup an integration with Google Drive and/or Notion to search your team documents. To get started run the command `/hashy integrate`\n\n"
+            "3. Share key documents that everyone on your team needs to know about. To share a document run `/hashy share <url>`\n\n"
+            "4. To search for documents run `/hashy search <query>`\n\n"
+            "5. For any questions or help need to run `/hashy help`",
+            channel=user_id
+        )
 
 api = FastAPI()
 

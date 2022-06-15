@@ -80,7 +80,7 @@ def get_notion_page(integration, source_id):
         "Notion-Version": "2021-08-16"
     }
     api_url = f"https://api.notion.com/v1/pages/{source_id}"
-    response = requests.get(api_url, headers=headers).json()
+    response = requests.get(api_url, headers=headers)
     if response.status_code != 200:
         return {"error": "Page not found"}
     json_response = response.json()
@@ -493,7 +493,7 @@ def extract_data_from_content_store(integration, content_store):
     chunk_size = 4
     for idx, i in enumerate(range(0, len(chunks), chunk_size)):
         chunk = chunks[i:i+chunk_size]
-        chunk_str = " ".join(chunk).strip().replace("\n", " ")
+        chunk_str = " ".join(" ".join(chunk).strip().replace("\n", " ").split())
         split_text.append({
             "id": f"{team_id}-{content_store['source_id']}-{idx}",
             "text": chunk_str,
