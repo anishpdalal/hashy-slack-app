@@ -174,103 +174,104 @@ def handle_message_channel(event, say, client):
             source_ids = [result["source_id"] for result in results]
             content_stores = crud.get_content_stores(source_ids) or []
             content_store_user_mapping = {content_store.source_id: content_store.is_boosted for content_store in content_stores}
-            boosted_content_results = [result for result in results if content_store_user_mapping.get(result["source_id"])]
+            boosted_content_results = [result for result in results if content_store_user_mapping.get(result["source_id"]) and result.get("text_type") == "content"]
             slack_message_results = [result for result in results if result["source_type"] in ["slack_message", "answer"]]
             content_results = boosted_content_results + slack_message_results
             summarized_result = None
             if content_results:
-                top_result = content_results[0]
-                top_result_type = top_result["source_type"]
-                if top_result_type == "slack_message":
-                    top_result_text = _get_adjancent_slack_text(client, top_result)
-                else:
-                    top_result_text = top_result["text"] or top_result["answer"]
-                summarized_result = _get_answer_from_doc(top_result_text, modified_query)
-            if summarized_result and "I don't know" not in summarized_result:
-                blocks = []
-                top_result = results[0]
-                source_name = top_result["name"]
-                source_url = top_result["url"]
-                blocks.append(
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": summarized_result
-                        }
-                    }
-                )
-                blocks.append(
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"Source: <{source_url}|{source_name}> \n\n"
-                        }
-                    }
-                )
-                blocks.extend([
-                    {
-                        "type": "actions",
-                        "elements": [
+                for content_result in content_results[:3]:
+                    result_type = content_result["source_type"]
+                    if result_type == "slack_message":
+                        result_text = _get_adjancent_slack_text(client, content_result)
+                    else:
+                        result_text = content_result["text"] or content_result["answer"]
+                    summarized_result = _get_answer_from_doc(result_text, modified_query)
+                    if summarized_result and "I don't know" not in summarized_result:
+                        blocks = []
+                        top_result = results[0]
+                        source_name = top_result["name"]
+                        source_url = top_result["url"]
+                        blocks.append(
                             {
-                                "type": "button",
+                                "type": "section",
                                 "text": {
-                                    "type": "plain_text",
-                                    "text": "View More",
-                                    "emoji": True
-                                },
-                                "value": modified_query,
-                                "action_id": "view_more_button"
+                                    "type": "mrkdwn",
+                                    "text": summarized_result
+                                }
                             }
-			            ]
-		            },
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": "Rate the response to improve Hashy"
-                        }
-		            },
-                    {
-                        "type": "actions",
-                        "elements": [
+                        )
+                        blocks.append(
                             {
-                                "type": "button",
+                                "type": "section",
                                 "text": {
-                                    "type": "plain_text",
-                                    "text": ":thumbsup:",
-                                    "emoji": True
-                                },
-                                "value": query_id,
-                                "action_id": "upvote"
+                                    "type": "mrkdwn",
+                                    "text": f"Source: <{source_url}|{source_name}> \n\n"
+                                }
+                            }
+                        )
+                        blocks.extend([
+                            {
+                                "type": "actions",
+                                "elements": [
+                                    {
+                                        "type": "button",
+                                        "text": {
+                                            "type": "plain_text",
+                                            "text": "View More",
+                                            "emoji": True
+                                        },
+                                        "value": modified_query,
+                                        "action_id": "view_more_button"
+                                    }
+                                ]
                             },
                             {
-                                "type": "button",
+                                "type": "section",
                                 "text": {
-                                    "type": "plain_text",
-                                    "text": ":thumbsdown:",
-                                    "emoji": True
-                                },
-                                "value": query_id,
-                                "action_id": "downvote"
+                                    "type": "mrkdwn",
+                                    "text": "Rate the response to improve Hashy"
+                                }
+                            },
+                            {
+                                "type": "actions",
+                                "elements": [
+                                    {
+                                        "type": "button",
+                                        "text": {
+                                            "type": "plain_text",
+                                            "text": ":thumbsup:",
+                                            "emoji": True
+                                        },
+                                        "value": query_id,
+                                        "action_id": "upvote"
+                                    },
+                                    {
+                                        "type": "button",
+                                        "text": {
+                                            "type": "plain_text",
+                                            "text": ":thumbsdown:",
+                                            "emoji": True
+                                        },
+                                        "value": query_id,
+                                        "action_id": "downvote"
+                                    }
+                                ]
                             }
-                        ]
-                    }
-                ])
-                client.chat_postMessage(channel=channel, thread_ts=ts, blocks=blocks)
-                requests.post(
-                    f"{os.environ['API_URL']}/ping",
-                    data=json.dumps(
-                        {
-                            "query_id": query_id,
-                            "team_id": team,
-                            "user_id": user,
-                            "event_type": "AUTO_REPLY",
-                            "summarized_text": summarized_result
-                        }
-                    )
-                )
+                        ])
+                        client.chat_postMessage(channel=channel, thread_ts=ts, blocks=blocks)
+                        requests.post(
+                            f"{os.environ['API_URL']}/ping",
+                            data=json.dumps(
+                                {
+                                    "query_id": query_id,
+                                    "team_id": team,
+                                    "user_id": user,
+                                    "event_type": "AUTO_REPLY",
+                                    "summarized_text": summarized_result
+                                }
+                            )
+                        )
+                        break
 
 
 @app.action("upvote")
