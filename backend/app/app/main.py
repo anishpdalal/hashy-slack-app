@@ -188,9 +188,8 @@ def handle_message_channel(event, say, client):
                     summarized_result = _get_answer_from_doc(result_text, modified_query)
                     if summarized_result and "I don't know" not in summarized_result:
                         blocks = []
-                        top_result = results[0]
-                        source_name = top_result["name"]
-                        source_url = top_result["url"]
+                        source_name = content_result["name"]
+                        source_url = content_result["url"]
                         blocks.append(
                             {
                                 "type": "section",
