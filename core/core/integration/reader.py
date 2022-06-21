@@ -493,7 +493,7 @@ def extract_data_from_content_store(integration, content_store):
     chunk_size = 4
     for idx, i in enumerate(range(0, len(chunks), chunk_size)):
         chunk = chunks[i:i+chunk_size]
-        chunk_str = " ".join(" ".join(chunk).strip().replace("\n", " ").split())
+        chunk_str = " ".join(chunk)
         split_text.append({
             "id": f"{team_id}-{content_store['source_id']}-{idx}",
             "text": chunk_str,
