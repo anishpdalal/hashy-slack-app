@@ -86,7 +86,7 @@ def handler(event, context):
                 db_last_updated = content_store_db.updated or content_store_db.created
                 content_store["source_last_updated"] = db_last_updated.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
             data = reader.extract_data_from_content_store(integration, content_store)
-            text = [d["text"] for d in data]
+            text = [" ".join(d["text"].strip().replace("\n", " ").split()) for d in data]
         if not text:
             continue
         if content_store_type == "slack_channel":

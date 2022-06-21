@@ -6,7 +6,7 @@ import logging
 import os
 import re
 from typing import Any, List
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 import uuid
 
 import boto3
@@ -536,6 +536,16 @@ def handle_view_events(ack, body, client, view):
         notion_id = os.environ["NOTION_CLIENT_ID"]
         redirect_uri = os.environ["NOTION_REDIRECT_URI"]
         msg = f"<https://api.notion.com/v1/oauth/authorize?owner=user&client_id={notion_id}&redirect_uri={redirect_uri}&response_type=code&state={user}-{team}|Click Here to integrate with Notion>"
+    elif integration.startswith("zendesk"):
+        parameters = {
+            "response_type": "code",
+            "redirect_uri": os.environ["ZENDESK_REDIRECT_URI"],
+            "client_id": os.environ["ZENDESK_CLIENT_ID"],
+            "scope": "tickets:read hc:read triggers:read triggers:write automations:read automations:write",
+            "state": f"{user}-{team}"
+        }
+        domain = os.environ["ZENDESK_DOMAIN"]
+        msg = f"<https://{domain}/oauth/authorizations/new?{urlencode(parameters)}|Click Here to integrate with Zendesk>"
     else:
         google_redirect_uri = os.environ["GOOGLE_REDIRECT_URI"]
         google_client_id = os.environ["GOOGLE_CLIENT_ID"]
@@ -737,6 +747,14 @@ def help_command(ack, respond, command, client):
                                 "emoji": True
                             },
                             "value": f"gdrive-{channel}"
+                        },
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": "Zendesk",
+                                "emoji": True
+                            },
+                            "value": f"zendesk-{channel}"
                         }
                     ]
                 },
@@ -1244,6 +1262,49 @@ async def notion_oauth_redirect(code, state):
         channel=user_id,
         text="Integrating your notion documents! It may take up to a few hours to process all of them. Once "
         "they are ready we'll send you a message to notify you."
+    )
+    response = RedirectResponse(f"https://app.slack.com/client/{team_id}")
+    return response
+
+
+@api.get("/zendesk/oauth_redirect")
+async def zendesk_oauth_redirect(code, state):
+    parameters = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "client_id": os.environ["ZENDESK_CLIENT_ID"],
+        "client_secret": os.environ["ZENDESK_SECRET"],
+        "redirect_uri": os.environ["ZENDESK_REDIRECT_URI"],
+        "scope": "tickets:read hc:read triggers:read triggers:write automations:read automations:write",
+        "state": state
+    }
+    payload = json.dumps(parameters)
+    header = {"Content-Type": "application/json"}
+    domain = os.environ["ZENDESK_DOMAIN"]
+    url = f"https://{domain}/oauth/tokens"
+    r = requests.post(url=url, data=payload, headers=header)
+    data = r.json()
+    access_token = data["access_token"]
+    user_id, team_id = state.split("-")
+    fields = {
+        "team_id": team_id,
+        "type": "zendesk",
+        "token": access_token,
+        "user_id": user_id,
+    }
+    integration = crud.get_user_integration(team_id, user_id, "zendesk")
+    if integration:
+        crud.update_integration(integration.id, fields)
+    else:
+        crud.create_integration(fields)
+    bot = installation_store.find_bot(
+        enterprise_id=None,
+        team_id=team_id,
+    )
+    client = WebClient(token=bot.bot_token)
+    client.chat_postMessage(
+        channel=user_id,
+        text="Integrating with Zendesk documents!"
     )
     response = RedirectResponse(f"https://app.slack.com/client/{team_id}")
     return response

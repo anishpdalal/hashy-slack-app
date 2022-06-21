@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+from urllib.parse import urlparse
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -228,8 +229,71 @@ def list_content_stores(integration):
         return _get_gdrive_docs(integration)
     elif integration.type == "slack":
         return _get_slack_channels(integration)
+    elif integration.type == "zendesk":
+        help_center_articles = _get_zendesk_help_center_articles(integration)
+        results = _get_zendesk_tickets(integration)
+        results["content_stores"].extend(help_center_articles)
+        return results
     else:
         return []
+
+
+def _get_zendesk_help_center_articles(integration):
+    articles = []
+    domain = os.environ["ZENDESK_DOMAIN"]
+    url = f"https://{domain}/api/v2/en-us/articles.json?sort_by=updated_at&sort_order=desc"
+    access_token = integration.token
+    bearer_token = f"Bearer {access_token}"
+    header = {"Authorization": bearer_token}
+    response = requests.get(url, headers=header)
+    data = response.json()
+    for article in data.get("articles", []):
+        articles.append(
+            {
+                "team_id": integration.team_id,
+                "user_id": integration.user_id,
+                "url": article["html_url"],
+                "type": "zendesk|help_center_article",
+                "name": article["title"],
+                "source_id": str(article["id"]),
+                "source_last_updated": article["edited_at"]
+            }
+        )
+    return articles
+
+
+def _get_zendesk_tickets(integration):
+    result = {
+        "cursor": None,
+        "content_stores": []
+    }
+    last_cursor = integration.last_cursor
+    access_token = integration.token
+    bearer_token = f"Bearer {access_token}"
+    header = {"Authorization": bearer_token}
+    domain = os.environ["ZENDESK_DOMAIN"]
+    url = f"https://{domain}/api/v2/tickets.json?sort=-updated_at&page[size]=100"
+    if last_cursor:
+        url = f"{url}&page[after]={last_cursor}"
+    response = requests.get(url, headers=header)
+    data = response.json()
+    last_cursor = data.get("meta", {}).get("after_cursor")
+    result["cursor"] = last_cursor
+    for ticket in data.get("tickets", []):
+        if ticket["status"] == "solved" or ticket["type"] == "closed":
+            subdomain = urlparse(ticket["url"]).netloc
+            result["content_stores"].append(
+                {
+                    "team_id": integration.team_id,
+                    "user_id": integration.user_id,
+                    "url": f"https:/{subdomain}/agent/tickets/{ticket['id']}",
+                    "type": "zendesk|ticket",
+                    "name": ticket["subject"],
+                    "source_id": str(ticket["id"]),
+                    "source_last_updated": ticket["updated_at"]
+                }
+            )
+    return result
 
 
 def _get_slack_txt_document_text(integration, content_store):
@@ -453,6 +517,38 @@ def _get_slack_channel_messages(integration, content_store):
     return filter_messages
 
 
+def _get_zendesk_help_article_text(integration, content_store):
+    try:
+        access_token = integration.token
+        bearer_token = f"Bearer {access_token}"
+        header = {"Authorization": bearer_token}
+        domain = os.environ["ZENDESK_DOMAIN"]
+        url = f"https://{domain}/api/v2/help_center/en-us/articles/{content_store['source_id']}"
+        response = requests.get(url, headers=header)
+        data = response.json()
+        article_body = data.get("article", {}).get("body")
+        CLEANR = re.compile('<.*?>')
+        cleantext = " ".join(re.sub(CLEANR, ' ', article_body).split())
+        return cleantext
+    except:
+        return ""
+
+
+def _get_zendesk_ticket_text(integration, content_store):
+    try:
+        access_token = integration.token
+        bearer_token = f"Bearer {access_token}"
+        header = {"Authorization": bearer_token}
+        domain = os.environ["ZENDESK_DOMAIN"]
+        url = f"https://{domain}/api/v2/tickets/{content_store['source_id']}"
+        response = requests.get(url, headers=header)
+        data = response.json()
+        ticket_body = data.get("ticket", {}).get("description")
+        return ticket_body
+    except:
+        return ""
+
+
 def extract_data_from_content_store(integration, content_store):
     type = content_store["type"]
     text = None
@@ -472,6 +568,10 @@ def extract_data_from_content_store(integration, content_store):
         text = _get_slack_pdf_document_text(integration, content_store)
     elif type == "slack|text/plain":
         text = _get_slack_txt_document_text(integration, content_store)
+    elif type == "zendesk|help_center_article":
+        text = _get_zendesk_help_article_text(integration, content_store)
+    elif type == "zendesk|ticket":
+        text = _get_zendesk_ticket_text(integration, content_store)
     else:
         pass
     split_text = []
@@ -493,7 +593,7 @@ def extract_data_from_content_store(integration, content_store):
     chunk_size = 4
     for idx, i in enumerate(range(0, len(chunks), chunk_size)):
         chunk = chunks[i:i+chunk_size]
-        chunk_str = " ".join(" ".join(chunk).strip().replace("\n", " ").split())
+        chunk_str = " ".join(chunk)
         split_text.append({
             "id": f"{team_id}-{content_store['source_id']}-{idx}",
             "text": chunk_str,
