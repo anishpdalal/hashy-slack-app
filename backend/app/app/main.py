@@ -1247,3 +1247,10 @@ async def notion_oauth_redirect(code, state):
     )
     response = RedirectResponse(f"https://app.slack.com/client/{team_id}")
     return response
+
+
+@api.get("/zendesk/oauth_redirect")
+async def zendesk_oauth_redirect(request: Request):
+    params = request.query_params
+    url = f'{os.environ["ZENDESK_REDIRECT"]}?{params}'
+    return RedirectResponse(url=url)
