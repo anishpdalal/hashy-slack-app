@@ -184,39 +184,42 @@ def _get_slack_channels(integration):
         "content_stores": []
     }
     client = WebClient(token=integration.token)
-    domain = client.team_info()["team"]["domain"]
-    channels = []
-    public_channels = client.conversations_list(type="public_channel", limit=1000)
-    channels.extend(public_channels.get("channels", []))
-    next_cursor = public_channels.get("response_metadata", {}).get("next_cursor")
-    while next_cursor:
-        public_channels = client.conversations_list(
-            type="public_channel",
-            limit=1000,
-            cursor=next_cursor
-        )
+    try:
+        domain = client.team_info()["team"]["domain"]
+        channels = []
+        public_channels = client.conversations_list(type="public_channel", limit=1000)
         channels.extend(public_channels.get("channels", []))
         next_cursor = public_channels.get("response_metadata", {}).get("next_cursor")
-    channels = [channel for channel in channels if channel["is_member"]]
-    for channel in channels:
-        channel_id = channel["id"]
-        latest_conversation = client.conversations_history(channel=channel_id, limit=1)
-        if "messages" in latest_conversation and len(latest_conversation["messages"]) == 1:
-            source_last_updated = latest_conversation["messages"][0]["ts"]
-            source_last_updated = datetime.datetime.fromtimestamp(float(source_last_updated)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        else:
-            source_last_updated = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        result["content_stores"].append(
-            {
-                "team_id": integration.team_id,
-                "user_id": None,
-                "url": f"https://{domain}.slack.com/archives/{channel_id}",
-                "type": "slack_channel",
-                "name": channel["name"],
-                "source_id": channel_id,
-                "source_last_updated": source_last_updated
-            }
-        )
+        while next_cursor:
+            public_channels = client.conversations_list(
+                type="public_channel",
+                limit=1000,
+                cursor=next_cursor
+            )
+            channels.extend(public_channels.get("channels", []))
+            next_cursor = public_channels.get("response_metadata", {}).get("next_cursor")
+        channels = [channel for channel in channels if channel["is_member"]]
+        for channel in channels:
+            channel_id = channel["id"]
+            latest_conversation = client.conversations_history(channel=channel_id, limit=1)
+            if "messages" in latest_conversation and len(latest_conversation["messages"]) == 1:
+                source_last_updated = latest_conversation["messages"][0]["ts"]
+                source_last_updated = datetime.datetime.fromtimestamp(float(source_last_updated)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            else:
+                source_last_updated = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+            result["content_stores"].append(
+                {
+                    "team_id": integration.team_id,
+                    "user_id": None,
+                    "url": f"https://{domain}.slack.com/archives/{channel_id}",
+                    "type": "slack_channel",
+                    "name": channel["name"],
+                    "source_id": channel_id,
+                    "source_last_updated": source_last_updated
+                }
+            )
+    except:
+        pass
 
     return result
 
